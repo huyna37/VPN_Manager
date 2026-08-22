@@ -13,14 +13,12 @@ try {
     }
 } catch {}
 
-# Xác định thư mục ứng dụng & file cấu hình (Động 100% trên mọi máy)
-$baseDir = $PSScriptRoot
-if ([string]::IsNullOrEmpty($baseDir)) {
-    $baseDir = [System.AppDomain]::CurrentDomain.BaseDirectory
-}
-if ([string]::IsNullOrEmpty($baseDir)) {
-    $baseDir = (Get-Location).Path
-}
+# Xác định thư mục ứng dụng & file cấu hình (Động 100% trên mọi máy & EXE)
+$baseDir = $env:VPN_MANAGER_APP_DIR
+if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = $PSScriptRoot }
+if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = [System.AppDomain]::CurrentDomain.BaseDirectory }
+if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = (Get-Location).Path }
+
 
 
 function Get-Absolute-Path([string]$path) {

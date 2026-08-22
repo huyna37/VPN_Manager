@@ -62,9 +62,11 @@ $csFooter = @"
                 psi.FileName = "powershell.exe";
                 psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + tempPs1 + "\"";
                 psi.WorkingDirectory = exeDir;
+                psi.EnvironmentVariables["VPN_MANAGER_APP_DIR"] = exeDir;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
+
 
                 Process p = Process.Start(psi);
                 p.WaitForExit();
