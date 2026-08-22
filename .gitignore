@@ -1,0 +1,15 @@
+# Credentials & Sensitive User Configuration
+vpn_config.json
+auth.txt
+*_auth.txt
+*.log
+
+# Binaries & Compiled Executables
+*.exe
+
+# Temporary files
+*.tmp
+*.bak
+scratch/
+.vs/
+.idea/

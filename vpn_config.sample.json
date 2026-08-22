@@ -1,0 +1,29 @@
+{
+    "sophos": {
+        "enabled": true,
+        "name": "1. Sophos SSL VPN (SFOS)",
+        "username": "your_username",
+        "password": "your_password",
+        "secret": "YOUR_TOTP_SECRET_KEY_HERE",
+        "dir": "config\\sophos",
+        "configName": "sophos",
+        "ovpnFile": "sophos.ovpn"
+    },
+    "openvpn_dr": {
+        "enabled": true,
+        "name": "2. OpenVPN (VPN DR Epay)",
+        "username": "your_username",
+        "password": "your_password",
+        "secret": "YOUR_TOTP_SECRET_KEY_HERE",
+        "dir": "config\\epay-dr",
+        "configName": "epay-dr",
+        "ovpnFile": "epay-dr.ovpn"
+    },
+    "forticlient": {
+        "enabled": false,
+        "name": "3. FortiClient",
+        "username": "your_username",
+        "password": "your_password",
+        "exePath": "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"
+    }
+}
