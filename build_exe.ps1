@@ -6,7 +6,13 @@ Write-Host "  BAT DAU DONG GOI VPN MANAGER SANG FILE EXE   " -ForegroundColor Cy
 Write-Host "===============================================" -ForegroundColor Cyan
 
 $baseDir = $PSScriptRoot
-if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = "c:\Users\Huy\Downloads\VPN_Manager" }
+if ([string]::IsNullOrEmpty($baseDir)) {
+    $baseDir = [System.AppDomain]::CurrentDomain.BaseDirectory
+}
+if ([string]::IsNullOrEmpty($baseDir)) {
+    $baseDir = (Get-Location).Path
+}
+
 
 $ps1File = Join-Path $baseDir "vpn_manager.ps1"
 $csFile = Join-Path $baseDir "VPN_Manager.cs"
