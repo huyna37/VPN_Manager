@@ -127,9 +127,25 @@ $csFooter = @"
 $fullCs = $csHeader + $escapedCode + $csFooter
 Set-Content -Path $csFile -Value $fullCs -Encoding UTF8
 
-Write-Host "-> Dang thuc thi bien dich C# sang VPN_Manager.exe..." -ForegroundColor Yellow
-$compileArgs = "/target:winexe /out:`"$exeFile`" /r:System.Windows.Forms.dll `"$csFile`""
+$manifestFile = Join-Path $baseDir "app.manifest"
+$manifestXml = @"
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
+"@
+Set-Content -Path $manifestFile -Value $manifestXml -Encoding UTF8
+
+Write-Host "-> Dang thuc thi bien dich C# sang VPN_Manager.exe (Chay quyen Standard User - 0 UAC Prompt)..." -ForegroundColor Yellow
+$compileArgs = "/target:winexe /win32manifest:`"$manifestFile`" /out:`"$exeFile`" /r:System.Windows.Forms.dll `"$csFile`""
 Start-Process -FilePath $cscExe -ArgumentList $compileArgs -Wait -NoNewWindow
+Remove-Item -Path $manifestFile -Force -ErrorAction SilentlyContinue
 
 if (Test-Path $exeFile) {
     Remove-Item -Path $csFile -Force -ErrorAction SilentlyContinue

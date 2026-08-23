@@ -67,6 +67,8 @@ function Get-Default-Config {
             name = "3. FortiClient"
             username = ""
             password = ""
+            server = "14.238.148.196:4443"
+            servercert = "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio="
             exePath = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
         }
     }
@@ -199,19 +201,49 @@ $lblSt2.Location = New-Object System.Drawing.Point(285, 79)
 $lblSt2.Size = New-Object System.Drawing.Size(210, 22)
 $grpVPN.Controls.Add($lblSt2)
 
+# Hàm kiểm tra khả năng chạy FortiClient (Cần quyền Admin hoặc Task Scheduler đã đăng ký)
+function Test-FortiCapability {
+    $toolsOpenConnect = Join-Path $baseDir "tools\openconnect.exe"
+    if (-not (Test-Path $toolsOpenConnect)) {
+        return @{ Available = $false; Reason = "Thiếu tools\openconnect.exe" }
+    }
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) { return @{ Available = $true; Reason = "Admin" } }
+    try {
+        $taskCheck = schtasks.exe /query /tn "VPN_Manager_FortiClient" 2>$null
+        if ($taskCheck -match "VPN_Manager_FortiClient") {
+            return @{ Available = $true; Reason = "User Task" }
+        }
+    } catch {}
+    return @{ Available = $false; Reason = "Cần Admin / Task ngầm" }
+}
+
+$fortiCap = Test-FortiCapability
+
 # Row 3: FortiClient
 $chk3 = New-Object System.Windows.Forms.CheckBox
 $chk3.Text = "3. FortiClient"
 $chk3.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
 $chk3.Location = New-Object System.Drawing.Point(20, 120)
 $chk3.Size = New-Object System.Drawing.Size(260, 28)
-$chk3.Checked = [bool]$cfg.forticlient.enabled
+if ($fortiCap.Available) {
+    $chk3.Checked = [bool]$cfg.forticlient.enabled
+    $chk3.Enabled = $true
+} else {
+    $chk3.Checked = $false
+    $chk3.Enabled = $false
+}
 $grpVPN.Controls.Add($chk3)
 
 $lblSt3 = New-Object System.Windows.Forms.Label
-$lblSt3.Text = "○ Chưa kết nối"
+if ($fortiCap.Available) {
+    $lblSt3.Text = "○ Chưa kết nối"
+    $lblSt3.ForeColor = [System.Drawing.Color]::Gray
+} else {
+    $lblSt3.Text = "○ ($($fortiCap.Reason))"
+    $lblSt3.ForeColor = [System.Drawing.Color]::FromArgb(180, 100, 0)
+}
 $lblSt3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
-$lblSt3.ForeColor = [System.Drawing.Color]::Gray
 $lblSt3.Location = New-Object System.Drawing.Point(285, 124)
 $lblSt3.Size = New-Object System.Drawing.Size(210, 22)
 $grpVPN.Controls.Add($lblSt3)
@@ -313,13 +345,29 @@ $timer.Add_Tick({
             $lblSt2.ForeColor = [System.Drawing.Color]::Gray
         }
 
-        # 3. FortiClient (10.x.x.x trên Ethernet 9 / Forti)
-        $fortiIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -match "Ethernet 9|Forti|PPP" -and $_.IPAddress -match "^10\." -and $_.AddressState -eq "Preferred" }
-        if (-not $fortiIP) {
-            $fortiIP = Get-NetIPAddress -InterfaceAlias "Ethernet 9" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^10\." -and $_.AddressState -eq "Preferred" }
+        # 3. FortiClient (10.x.x.x khác 10.150.x.x, hoặc đọc từ log OpenConnect)
+        $fortiDisplayIP = ""
+        $fortiIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
+            $_.IPAddress -match "^10\." -and $_.IPAddress -notmatch "^10\.150\." -and $_.AddressState -eq "Preferred" 
         }
         if ($fortiIP) {
-            $lblSt3.Text = "● ĐÃ KẾT NỐI ($($fortiIP[0].IPAddress))"
+            $fortiDisplayIP = $fortiIP[0].IPAddress
+        } else {
+            # Đọc từ file log OpenConnect nếu process đang chạy
+            $ocProc = Get-Process -Name "openconnect" -ErrorAction SilentlyContinue
+            if ($ocProc) {
+                $logPath = Join-Path $baseDir "forti_openconnect.log"
+                if (Test-Path $logPath) {
+                    $logText = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+                    if ($logText -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
+                        $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
+                    }
+                }
+            }
+        }
+
+        if (![string]::IsNullOrEmpty($fortiDisplayIP)) {
+            $lblSt3.Text = "● ĐÃ KẾT NỐI ($fortiDisplayIP)"
             $lblSt3.ForeColor = [System.Drawing.Color]::Green
         } else {
             $lblSt3.Text = "○ Chưa kết nối"
@@ -396,7 +444,16 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
     Set-Content -Path $targetOvpn -Value $ovpnContent -Encoding UTF8
 
     if (Test-Path $openvpnGuiExe) {
+        # Đảm bảo OpenVPN GUI đang chạy ở khay hệ thống
+        $guiProc = Get-Process -Name "openvpn-gui" -ErrorAction SilentlyContinue
+        if (-not $guiProc) {
+            Start-Process -FilePath $openvpnGuiExe -WindowStyle Hidden
+            Start-Sleep -Milliseconds 800
+        }
+        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command rescan" -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect ${configName}.ovpn" -ErrorAction SilentlyContinue
+        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--connect ${configName}.ovpn" -ErrorAction SilentlyContinue
         Log-Msg "[OK] Đã gửi lệnh kết nối $profileName ngầm (0 Admin)!"
     } else {
         $ovpnPath = Join-Path $srcDir $ovpnFileName
@@ -434,11 +491,12 @@ function Stop-AllVPN {
     # 4. Release IP trên Card mạng OpenVPN TAP
     try { Start-Process -FilePath "ipconfig.exe" -ArgumentList "/release `"OpenVPN TAP-Windows6`"" -WindowStyle Hidden -ErrorAction SilentlyContinue } catch {}
 
-    # 5. Gửi lệnh ngắt FortiClient nếu có CLI
-    $cliExe = Join-Path $baseDir "tools\FortiSSLVPNclient.exe"
-    if (Test-Path $cliExe) {
-        Start-Process -FilePath $cliExe -ArgumentList "disconnect" -WorkingDirectory $baseDir -WindowStyle Hidden -ErrorAction SilentlyContinue
-    }
+    # 5. Gửi lệnh ngắt OpenConnect cho FortiClient
+    try {
+        schtasks.exe /end /tn "VPN_Manager_FortiClient" 2>$null | Out-Null
+        Get-WmiObject Win32_Process -Filter "Name = 'openconnect.exe'" -ErrorAction SilentlyContinue | ForEach-Object { $_.Terminate() }
+        Get-WmiObject Win32_Process -Filter "Name = 'openfortivpn-go.exe'" -ErrorAction SilentlyContinue | ForEach-Object { $_.Terminate() }
+    } catch {}
 
     Log-Msg "[OK] Đã gửi lệnh ngắt kết nối toàn bộ VPN thành công!"
     Log-Msg "[✓] Giao diện quản lý vẫn mở để bạn có thể kết nối lại bất cứ lúc nào."
@@ -446,8 +504,6 @@ function Stop-AllVPN {
 
 # Function thực thi kết nối các VPN đã chọn
 function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
-
-
     if ($do1 -or $do2) {
         if (Test-Path $openvpnGuiExe) {
             Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect_all" -ErrorAction SilentlyContinue
@@ -459,61 +515,99 @@ function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
     # 1. Sophos SSL VPN
     if ($do1) {
         Connect-OpenVpnProfile "1. Sophos SSL VPN" "sophos" $cfg.sophos.dir $cfg.sophos.ovpnFile $cfg.sophos.username $cfg.sophos.password $cfg.sophos.secret
+        if ($do2 -or $do3) { Start-Sleep -Seconds 2 }
     }
 
     # 2. OpenVPN DR Epay
     if ($do2) {
         Connect-OpenVpnProfile "2. OpenVPN (VPN DR Epay)" "epay-dr" $cfg.openvpn_dr.dir $cfg.openvpn_dr.ovpnFile $cfg.openvpn_dr.username $cfg.openvpn_dr.password $cfg.openvpn_dr.secret
+        if ($do3) { Start-Sleep -Seconds 2 }
     }
 
-    # 3. FortiClient
+    # 3. FortiClient (OpenConnect Duy Nhất)
     if ($do3) {
         Log-Msg "-------------------------------------------"
-        Log-Msg "Đang kết nối: 3. FortiClient (Tài khoản $($cfg.forticlient.username))..."
+        Log-Msg "Đang kết nối: 3. FortiClient qua OpenConnect (Tài khoản $($cfg.forticlient.username))..."
         $u = $cfg.forticlient.username
         $p = $cfg.forticlient.password
-        
-        $cliExe = @(
-            (Join-Path $baseDir "tools\FortiSSLVPNclient.exe"),
-            (Join-Path $baseDir "FortiSSLVPNclient.exe"),
-            "C:\Program Files\Fortinet\FortiClient\FortiSSLVPNclient.exe",
-            "C:\Program Files (x86)\Fortinet\FortiClient\FortiSSLVPNclient.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-        if ($cliExe) {
+        $serverAddr = $cfg.forticlient.server
+        if ([string]::IsNullOrWhiteSpace($serverAddr)) {
             $serverAddr = "14.238.148.196:4443"
             try {
                 $regServer = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "Server" -ErrorAction SilentlyContinue).Server
                 if (![string]::IsNullOrWhiteSpace($regServer)) { $serverAddr = $regServer }
             } catch {}
+        }
+        
+        # Tìm kiếm duy nhất openconnect.exe
+        $openConnectExe = @(
+            (Join-Path $baseDir "tools\openconnect.exe"),
+            (Join-Path $baseDir "openconnect.exe"),
+            "C:\Program Files\OpenConnect GUI\openconnect.exe",
+            "C:\Program Files (x86)\OpenConnect GUI\openconnect.exe",
+            "C:\Program Files\OpenConnect\openconnect.exe",
+            "C:\Program Files (x86)\OpenConnect\openconnect.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-            Log-Msg "-> Tìm thấy FortiClient CLI: $cliExe"
-            Log-Msg "-> Khởi chạy kết nối ngầm tới $serverAddr..."
-            Start-Process -FilePath $cliExe -ArgumentList "connect -h `"$serverAddr`" -u `"${u}:${p}`" -i -m -q" -WorkingDirectory $baseDir -WindowStyle Hidden
-            Log-Msg "[OK] Đã gửi lệnh kết nối FortiClient ngầm 1-click qua CLI!"
-        } else {
+        if (-not $openConnectExe) {
+            $cmdCheck = Get-Command "openconnect.exe" -ErrorAction SilentlyContinue
+            if ($cmdCheck) { $openConnectExe = $cmdCheck.Source }
+        }
+
+        if ($openConnectExe) {
+            Log-Msg "-> Tìm thấy OpenConnect CLI: $openConnectExe"
+            Log-Msg "-> Khởi chạy kết nối ngầm Fortinet SSL VPN tới $serverAddr..."
+            
+            $serverUrl = if ($serverAddr -match "^https?://") { $serverAddr } else { "https://$serverAddr" }
+            $certVal = $cfg.forticlient.servercert
+            if ([string]::IsNullOrWhiteSpace($certVal)) { $certVal = "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio=" }
+            $certArg = "--servercert `"$certVal`" --non-inter"
+            
+            $logFile = Join-Path $baseDir "forti_openconnect.log"
+            if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
+
+            $passFile = Join-Path $baseDir "tools\oc_pass.txt"
+            Set-Content -Path $passFile -Value $p -Encoding ASCII
+
+            # Tạo file bat chạy ngầm để Task Scheduler hoặc Start-Process gọi
+            $runBat = Join-Path $baseDir "tools\run_forti.bat"
+            $toolsDir = Join-Path $baseDir "tools"
+            $batContent = "@echo off`r`ncd /d `"$toolsDir`"`r`ntype `"$passFile`" | `"$openConnectExe`" --protocol=fortinet --no-dtls -u `"$u`" --passwd-on-stdin $serverUrl $certArg > `"$logFile`" 2>&1"
+            Set-Content -Path $runBat -Value $batContent -Encoding ASCII
+
+            # Thử chạy qua Scheduled Task nếu đã đăng ký (Không cần Admin)
+            $taskName = "VPN_Manager_FortiClient"
+            $useTask = $false
             try {
-                Set-ItemProperty -Path "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "User" -Value $u -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "promptusername" -Value 0 -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "save_username" -Value 1 -Force -ErrorAction SilentlyContinue
-                Set-ItemProperty -Path "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "User" -Value $u -Force -ErrorAction SilentlyContinue
+                $chk = schtasks.exe /query /tn $taskName 2>$null
+                if ($chk -match $taskName) {
+                    schtasks.exe /run /tn $taskName 2>$null | Out-Null
+                    $useTask = $true
+                }
             } catch {}
 
-            try { [System.Windows.Forms.Clipboard]::SetText($p) } catch {}
-
-            $fortiGuiExe = "C:\Program Files\Fortinet\FortiClient\FortiGui.exe"
-            $fortiExe = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
-            $targetLauncher = $fortiExe
-            if (Test-Path $fortiGuiExe) { $targetLauncher = $fortiGuiExe }
-
-            if (Test-Path $targetLauncher) {
-                Start-Process -FilePath $targetLauncher -WorkingDirectory "C:\Program Files\Fortinet\FortiClient\" -ErrorAction SilentlyContinue
-                Log-Msg "[OK] Đã bật giao diện FortiClient mượt mà và tự động nạp Tài khoản!"
-                Log-Msg "[i] Mật khẩu đã được tự động copy vào Clipboard (Ctrl+V)."
-                Log-Msg "[i] Bạn chỉ cần nhấp vào ô Mật khẩu -> dán (Ctrl+V) -> Bấm Connect để hoàn tất kết nối."
-            } else {
-                Log-Msg "[-] Không tìm thấy FortiClient tại $fortiExe"
+            if (-not $useTask) {
+                # Chạy trực tiếp qua cmd.exe nếu chưa đăng ký Task
+                $cmdArgs = "/c `"$runBat`""
+                Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArgs -WorkingDirectory $toolsDir -WindowStyle Hidden
             }
+            
+            # Đọc nhật ký thực tế vừa ghi để đưa lên khung Log
+            Start-Sleep -Seconds 4
+            if (Test-Path $logFile) {
+                $lines = Get-Content $logFile -ErrorAction SilentlyContinue
+                foreach ($l in $lines) {
+                    if (![string]::IsNullOrWhiteSpace($l)) {
+                        Log-Msg "   [OpenConnect] $l"
+                    }
+                }
+            }
+            Log-Msg "[OK] Đã phát lệnh kết nối OpenConnect! Theo dõi trạng thái đèn màu xanh ở trên."
+        } else {
+            Log-Msg "[-] LỖI: KHÔNG TÌM THẤY openconnect.exe!"
+            Log-Msg "[!] Vui lòng đảm bảo file openconnect.exe nằm trong thư mục tools\\"
+            return
         }
     }
 
@@ -524,12 +618,20 @@ function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
 # --- SỰ KIỆN NÚT BẤM ---
 $btnConnect.Add_Click({ Do-Connect $chk1.Checked $chk2.Checked $chk3.Checked })
 $btnAll.Add_Click({
-    $chk1.Checked = $true; $chk2.Checked = $true; $chk3.Checked = $true
-    Do-Connect $true $true $true
+    $chk1.Checked = $true
+    $chk2.Checked = $true
+    $canForti = (Test-FortiCapability).Available
+    if ($canForti) {
+        $chk3.Checked = $true
+        Do-Connect $true $true $true
+    } else {
+        $chk3.Checked = $false
+        Do-Connect $true $true $false
+    }
 })
 $btnDisconnect.Add_Click({ Stop-AllVPN })
 
-# Popup Cài đặt Tài khoản, Mật khẩu & Secret Key
+# Popup Cai dat Tai khoan, Mat khau va Secret Key
 $btnConfig.Add_Click({
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Cài Đặt Đầy Đủ Thông Tin Đăng Nhập & Tùy Chọn Mặc Định"

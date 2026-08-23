@@ -1,17 +1,14 @@
 ========================================================================
-HƯỚNG DẪN KẾT NỐI FORTICLIENT NGẦM 1-CLICK QUA FORTISSLVPNCLIENT (CLI)
+HƯỚNG DẪN KẾT NỐI FORTICLIENT NGẦM QUA OPENCONNECT (CLI)
 ========================================================================
 
-Ứng dụng VPN Multi-Connect Manager hỗ trợ 2 chế độ kết nối FortiClient:
+Ứng dụng VPN Multi-Connect Manager sử dụng OpenConnect làm công cụ duy nhất
+để kết nối Fortinet SSL VPN ngầm 1-click:
 
-1. CHẾ ĐỘ NGẦM SIÊU TỐC 1-CLICK (Khuyên dùng):
-   - Bạn chỉ cần tải file `FortiSSLVPNclient.exe` (nằm trong bộ FortiClientTools của Fortinet)
-     và chép vào thư mục `tools\` này (hoặc thư mục gốc VPN_Manager).
-   - Khi đó, ứng dụng sẽ tự động kết nối FortiClient ngầm 100% qua dòng lệnh mà KHÔNG CẦN
-     mở giao diện FortiClient, không cần gửi phím bấm hay bấm chuột!
-
-2. CHẾ ĐỘ GUI NÂNG CAO (Mặc định nếu chưa có file CLI):
-   - Ứng dụng tự động cấu hình Registry, copy sẵn Mật khẩu vào Clipboard (Ctrl+V)
-     và kích hoạt cửa sổ FortiClient để đăng nhập tự động.
+1. HƯỚNG DẪN SỬ DỤNG OPENCONNECT:
+   - Bạn chỉ cần chép file `openconnect.exe` vào thư mục `tools\` này
+     (hoặc cài đặt OpenConnect GUI trên máy tính).
+   - Ứng dụng sẽ tự động gọi OpenConnect chạy ngầm với cờ `--protocol=fortinet`
+     để kết nối trực tiếp Fortinet SSL VPN 100% tự động.
 
 ========================================================================

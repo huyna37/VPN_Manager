@@ -5,11 +5,14 @@ auth.txt
 *.log
 
 # Binaries & Compiled Executables
-*.exe
+# *.exe
 
 # Temporary files
 *.tmp
 *.bak
 scratch/
+tools/oc_pass.txt
+tools/vpn_pass.txt
+tools/run_forti.bat
 .vs/
 .idea/
