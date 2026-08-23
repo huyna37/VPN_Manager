@@ -1,4 +1,4 @@
-# Script Dong Goi Tu Dong VPN Manager sang File EXE
+# Script Dong Goi Tu Dong VPN Manager sang File EXE (Chi nhung thu muc config)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "===============================================" -ForegroundColor Cyan
@@ -12,7 +12,6 @@ if ([string]::IsNullOrEmpty($baseDir)) {
 if ([string]::IsNullOrEmpty($baseDir)) {
     $baseDir = (Get-Location).Path
 }
-
 
 $ps1File = Join-Path $baseDir "vpn_manager.ps1"
 $csFile = Join-Path $baseDir "VPN_Manager.cs"
@@ -29,6 +28,30 @@ if (-not (Test-Path $cscExe)) {
     exit 1
 }
 
+# Chi nhung cac file trong thu muc config
+$targetFiles = @(
+    "config\sophos\sophos.ovpn",
+    "config\epay-dr\epay-dr.ovpn"
+)
+
+Write-Host "-> Dang ma hoa va nhung truc tiep cac file .ovpn thu muc config vao EXE..." -ForegroundColor Yellow
+$extractCodeLines = @()
+
+foreach ($relPath in $targetFiles) {
+    $fullPath = Join-Path $baseDir $relPath
+    if (Test-Path $fullPath) {
+        $bytes = [System.IO.File]::ReadAllBytes($fullPath)
+        $b64 = [Convert]::ToBase64String($bytes)
+        $escapedRelPath = $relPath.Replace('\', '\\')
+        $extractCodeLines += "                EnsureFileExists(exeDir, `"$escapedRelPath`", `"$b64`");"
+        Write-Host "   + Da nhung: $relPath ($([Math]::Round($bytes.Length / 1KB, 2)) KB)" -ForegroundColor Green
+    } else {
+        Write-Host "   [!] Canh bao: Khong tim thay file $relPath" -ForegroundColor Yellow
+    }
+}
+
+$extractCodeBlock = $extractCodeLines -join "`r`n"
+
 Write-Host "-> Dang doc ma nguon vpn_manager.ps1..." -ForegroundColor Yellow
 $ps1Code = Get-Content -Path $ps1File -Raw -Encoding UTF8
 $escapedCode = $ps1Code.Replace('"', '""')
@@ -43,12 +66,34 @@ namespace VPNManagerApp
 {
     class Program
     {
+        private static void EnsureFileExists(string baseDir, string relativePath, string base64Content)
+        {
+            try
+            {
+                string fullPath = Path.Combine(baseDir, relativePath);
+                if (!File.Exists(fullPath))
+                {
+                    string dir = Path.GetDirectoryName(fullPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+                    byte[] bytes = Convert.FromBase64String(base64Content);
+                    File.WriteAllBytes(fullPath, bytes);
+                }
+            }
+            catch {}
+        }
+
         [STAThread]
         static void Main()
         {
             try
             {
                 string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+
+$extractCodeBlock
+
                 string tempPs1 = Path.Combine(Path.GetTempPath(), "vpn_manager_rt.ps1");
                 
                 string code = @"
@@ -66,7 +111,6 @@ $csFooter = @"
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
-
 
                 Process p = Process.Start(psi);
                 p.WaitForExit();
@@ -91,8 +135,8 @@ if (Test-Path $exeFile) {
     Remove-Item -Path $csFile -Force -ErrorAction SilentlyContinue
     $fileInfo = Get-Item $exeFile
     Write-Host "===============================================" -ForegroundColor Green
-    Write-Host "[OK] THANH CONG: Da dong goi file VPN_Manager.exe!" -ForegroundColor Green
-    Write-Host "-> Kich thuoc: $([Math]::Round($fileInfo.Length / 1KB, 2)) KB" -ForegroundColor Green
+    Write-Host "[OK] THANH CONG: Da nhung thu muc config vao VPN_Manager.exe!" -ForegroundColor Green
+    Write-Host "-> Kich thuoc EXE: $([Math]::Round($fileInfo.Length / 1KB, 2)) KB" -ForegroundColor Green
     Write-Host "===============================================" -ForegroundColor Green
 } else {
     Write-Host "[-] LOI: Bien dich that bai!" -ForegroundColor Red

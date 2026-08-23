@@ -1,4 +1,4 @@
-﻿# UTF-8 Encoding & WinForms Assemblies
+# UTF-8 Encoding & WinForms Assemblies
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -40,11 +40,46 @@ if (-not (Test-Path $userOpenVpnDir)) {
 }
 
 # Đọc & Lưu cấu hình JSON
+function Get-Default-Config {
+    return [PSCustomObject]@{
+        sophos = [PSCustomObject]@{
+            enabled = $true
+            name = "1. Sophos SSL VPN (SFOS)"
+            username = ""
+            password = ""
+            secret = ""
+            dir = "config\sophos"
+            configName = "sophos"
+            ovpnFile = "sophos.ovpn"
+        }
+        openvpn_dr = [PSCustomObject]@{
+            enabled = $true
+            name = "2. OpenVPN (VPN DR Epay)"
+            username = ""
+            password = ""
+            secret = ""
+            dir = "config\epay-dr"
+            configName = "epay-dr"
+            ovpnFile = "epay-dr.ovpn"
+        }
+        forticlient = [PSCustomObject]@{
+            enabled = $false
+            name = "3. FortiClient"
+            username = ""
+            password = ""
+            exePath = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
+        }
+    }
+}
+
 function Load-Config {
     if (Test-Path $configFile) {
-        try { return (Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch {}
+        try {
+            $parsed = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($parsed) { return $parsed }
+        } catch {}
     }
-    return $null
+    return Get-Default-Config
 }
 
 function Save-Config($cfg) {
@@ -334,7 +369,16 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
 
     # Đồng bộ file vào thư mục local của VPN_Manager
     $srcDir = Get-Absolute-Path $ovpnSubDir
+    if (-not (Test-Path $srcDir)) {
+        try { New-Item -ItemType Directory -Path $srcDir -Force | Out-Null } catch {}
+    }
     Set-Content -Path (Join-Path $srcDir "auth.txt") -Value @($username, $fullPass) -Encoding ASCII
+
+    $ovpnSrcFile = Join-Path $srcDir $ovpnFileName
+    if (-not (Test-Path $ovpnSrcFile)) {
+        Log-Msg "[-] LỖI: Không tìm thấy file cấu hình OpenVPN ($ovpnSrcFile)"
+        return
+    }
 
     # Đồng bộ file vào thư mục OpenVPN User Config (Chạy qua Service 0 Admin)
     $targetAuth = Join-Path $userOpenVpnDir "${configName}_auth.txt"
@@ -342,7 +386,7 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
     Set-Content -Path $targetAuth -Value @($username, $fullPass) -Encoding ASCII
 
     $mgmtPort = if ($configName -eq "sophos") { 7501 } else { 7502 }
-    $ovpnContent = Get-Content -Path (Join-Path $srcDir $ovpnFileName) -Raw
+    $ovpnContent = Get-Content -Path $ovpnSrcFile -Raw
     $ovpnContent = $ovpnContent -replace "auth-user-pass.*", "auth-user-pass ${configName}_auth.txt"
     if ($ovpnContent -notmatch "management\s+127\.0\.0\.1") {
         $ovpnContent += "`r`nmanagement 127.0.0.1 $mgmtPort`r`n"
