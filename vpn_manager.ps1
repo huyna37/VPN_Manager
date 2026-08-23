@@ -1,4 +1,4 @@
-# UTF-8 Encoding & WinForms Assemblies
+﻿# UTF-8 Encoding & WinForms Assemblies
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -436,6 +436,9 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
     $mgmtPort = if ($configName -eq "sophos") { 7501 } else { 7502 }
     $ovpnContent = Get-Content -Path $ovpnSrcFile -Raw
     $ovpnContent = $ovpnContent -replace "auth-user-pass.*", "auth-user-pass ${configName}_auth.txt"
+    if ($ovpnContent -notmatch "auth-retry\s+nointeract") {
+        $ovpnContent += "`r`nauth-retry nointeract`r`n"
+    }
     if ($ovpnContent -notmatch "management\s+127\.0\.0\.1") {
         $ovpnContent += "`r`nmanagement 127.0.0.1 $mgmtPort`r`n"
     } else {
