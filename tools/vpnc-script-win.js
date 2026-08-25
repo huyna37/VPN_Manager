@@ -230,7 +230,6 @@ case "connect":
             run("route add " + network + " mask " + netmask + " 0.0.0.0 if " + env("TUNIDX") + " metric 1");
             echo(INFO, "Configured Legacy IP split-include route: " + network + "/" + netmasklen);
         }
-        run("route add 10.110.0.0 mask 255.255.0.0 0.0.0.0 if " + env("TUNIDX") + " metric 1");
     } else if (REDIRECT_GATEWAY_METHOD == 1) {
         run("route add 0.0.0.0 mask 0.0.0.0 " + internal_gw + " metric 1");
         echo(INFO, "Configured Legacy IP default route.");

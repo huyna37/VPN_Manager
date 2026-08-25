@@ -1,10 +1,9 @@
-﻿# UTF-8 Encoding & WinForms Assemblies
+# UTF-8 Encoding & WinForms Assemblies
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName Microsoft.VisualBasic
 
-# Tự động ẩn cửa sổ Console đen của PowerShell, chỉ giữ lại Giao diện GUI UI
+# Ẩn cửa sổ Console đen của PowerShell, chỉ giữ lại Giao diện GUI
 try {
     $win32 = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();' -Name "Win32ConsoleHelper" -Namespace "Win32Utils" -PassThru -ErrorAction SilentlyContinue
     if ($win32) {
@@ -13,13 +12,11 @@ try {
     }
 } catch {}
 
-# Xác định thư mục ứng dụng & file cấu hình (Động 100% trên mọi máy & EXE)
+# Xác định thư mục ứng dụng & file cấu hình
 $baseDir = $env:VPN_MANAGER_APP_DIR
 if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = $PSScriptRoot }
 if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = [System.AppDomain]::CurrentDomain.BaseDirectory }
 if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = (Get-Location).Path }
-
-
 
 function Get-Absolute-Path([string]$path) {
     if ([string]::IsNullOrEmpty($path)) { return "" }
@@ -33,6 +30,9 @@ $openvpnGuiExe = "C:\Program Files\OpenVPN\bin\openvpn-gui.exe"
 if (-not (Test-Path $openvpnGuiExe)) {
     $openvpnGuiExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn-gui.exe"
 }
+if (-not (Test-Path $openvpnExe)) {
+    $openvpnExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn.exe"
+}
 
 $userOpenVpnDir = Join-Path $env:USERPROFILE "OpenVPN\config"
 if (-not (Test-Path $userOpenVpnDir)) {
@@ -44,7 +44,7 @@ function Get-Default-Config {
     return [PSCustomObject]@{
         sophos = [PSCustomObject]@{
             enabled = $true
-            name = "1. Sophos SSL VPN (SFOS)"
+            name = "1. Sophos SSL VPN"
             username = ""
             password = ""
             secret = ""
@@ -69,7 +69,6 @@ function Get-Default-Config {
             password = ""
             server = "14.238.148.196:4443"
             servercert = "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio="
-            exePath = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
         }
     }
 }
@@ -144,7 +143,7 @@ $pnlHeader.BackColor = [System.Drawing.Color]::FromArgb(20, 70, 120)
 $form.Controls.Add($pnlHeader)
 
 $lblTitle = New-Object System.Windows.Forms.Label
-$lblTitle.Text = "QUẢN LÝ KẾT NỐI VPN TỰ ĐỘNG (1-CLICK)"
+$lblTitle.Text = "QUẢN LÝ KẾT NỐI VPN TỰ ĐỘNG"
 $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblTitle.ForeColor = [System.Drawing.Color]::White
 $lblTitle.Location = New-Object System.Drawing.Point(20, 10)
@@ -152,7 +151,7 @@ $lblTitle.Size = New-Object System.Drawing.Size(520, 25)
 $pnlHeader.Controls.Add($lblTitle)
 
 $lblSub = New-Object System.Windows.Forms.Label
-$lblSub.Text = "Tự động tạo OTP, kết nối ngầm siêu tốc và hiển thị IP trực tiếp"
+$lblSub.Text = "Tự động tạo OTP, kết nối OpenVPN & FortiClient tiêu chuẩn"
 $lblSub.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
 $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(200, 225, 250)
 $lblSub.Location = New-Object System.Drawing.Point(20, 35)
@@ -161,7 +160,7 @@ $pnlHeader.Controls.Add($lblSub)
 
 # Group Danh sách VPN
 $grpVPN = New-Object System.Windows.Forms.GroupBox
-$grpVPN.Text = "  Danh Sách VPN & Trạng Thái Trực Tiếp  "
+$grpVPN.Text = "  Danh Sách VPN & Trạng Thái  "
 $grpVPN.Location = New-Object System.Drawing.Point(20, 75)
 $grpVPN.Size = New-Object System.Drawing.Size(505, 175)
 $grpVPN.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
@@ -201,49 +200,19 @@ $lblSt2.Location = New-Object System.Drawing.Point(285, 79)
 $lblSt2.Size = New-Object System.Drawing.Size(210, 22)
 $grpVPN.Controls.Add($lblSt2)
 
-# Hàm kiểm tra khả năng chạy FortiClient (Cần quyền Admin hoặc Task Scheduler đã đăng ký)
-function Test-FortiCapability {
-    $toolsOpenConnect = Join-Path $baseDir "tools\openconnect.exe"
-    if (-not (Test-Path $toolsOpenConnect)) {
-        return @{ Available = $false; Reason = "Thiếu tools\openconnect.exe" }
-    }
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if ($isAdmin) { return @{ Available = $true; Reason = "Admin" } }
-    try {
-        $taskCheck = schtasks.exe /query /tn "VPN_Manager_FortiClient" 2>$null
-        if ($taskCheck -match "VPN_Manager_FortiClient") {
-            return @{ Available = $true; Reason = "User Task" }
-        }
-    } catch {}
-    return @{ Available = $false; Reason = "Cần Admin / Task ngầm" }
-}
-
-$fortiCap = Test-FortiCapability
-
 # Row 3: FortiClient
 $chk3 = New-Object System.Windows.Forms.CheckBox
 $chk3.Text = "3. FortiClient"
 $chk3.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
 $chk3.Location = New-Object System.Drawing.Point(20, 120)
 $chk3.Size = New-Object System.Drawing.Size(260, 28)
-if ($fortiCap.Available) {
-    $chk3.Checked = [bool]$cfg.forticlient.enabled
-    $chk3.Enabled = $true
-} else {
-    $chk3.Checked = $false
-    $chk3.Enabled = $false
-}
+$chk3.Checked = [bool]$cfg.forticlient.enabled
 $grpVPN.Controls.Add($chk3)
 
 $lblSt3 = New-Object System.Windows.Forms.Label
-if ($fortiCap.Available) {
-    $lblSt3.Text = "○ Chưa kết nối"
-    $lblSt3.ForeColor = [System.Drawing.Color]::Gray
-} else {
-    $lblSt3.Text = "○ ($($fortiCap.Reason))"
-    $lblSt3.ForeColor = [System.Drawing.Color]::FromArgb(180, 100, 0)
-}
+$lblSt3.Text = "○ Chưa kết nối"
 $lblSt3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblSt3.ForeColor = [System.Drawing.Color]::Gray
 $lblSt3.Location = New-Object System.Drawing.Point(285, 124)
 $lblSt3.Size = New-Object System.Drawing.Size(210, 22)
 $grpVPN.Controls.Add($lblSt3)
@@ -294,9 +263,9 @@ $btnConfig.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btnConfig)
 
-# Nhật ký hiển thị (Log Window)
+# Nhật ký hiển thị
 $lblLog = New-Object System.Windows.Forms.Label
-$lblLog.Text = "Nhật ký kết nối (Chi tiết):"
+$lblLog.Text = "Nhật ký hoạt động:"
 $lblLog.Location = New-Object System.Drawing.Point(20, 350)
 $lblLog.Size = New-Object System.Drawing.Size(200, 18)
 $form.Controls.Add($lblLog)
@@ -345,28 +314,31 @@ $timer.Add_Tick({
             $lblSt2.ForeColor = [System.Drawing.Color]::Gray
         }
 
-        # 3. FortiClient (10.x.x.x khác 10.150.x.x, hoặc đọc từ log OpenConnect)
+        # 3. FortiClient (Chỉ báo kết nối khi có process openconnect/forticlient chạy thực tế)
+        $fortiConnected = $false
         $fortiDisplayIP = ""
-        $fortiIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
-            $_.IPAddress -match "^10\." -and $_.IPAddress -notmatch "^10\.150\." -and $_.AddressState -eq "Preferred" 
-        }
-        if ($fortiIP) {
-            $fortiDisplayIP = $fortiIP[0].IPAddress
-        } else {
-            # Đọc từ file log OpenConnect nếu process đang chạy
-            $ocProc = Get-Process -Name "openconnect" -ErrorAction SilentlyContinue
-            if ($ocProc) {
-                $logPath = Join-Path $baseDir "forti_openconnect.log"
-                if (Test-Path $logPath) {
-                    $logText = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
-                    if ($logText -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
-                        $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
-                    }
+        $ocProc = Get-Process -Name "openconnect", "openfortivpn", "forticlient" -ErrorAction SilentlyContinue
+        if ($ocProc) {
+            $logPath = Join-Path $baseDir "forti_openconnect.log"
+            if (Test-Path $logPath) {
+                $logText = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+                if ($logText -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
+                    $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
+                    $fortiConnected = $true
+                }
+            }
+            if (-not $fortiConnected) {
+                $vpnIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
+                    $_.InterfaceAlias -notmatch "^(Ethernet|Wi-Fi|Loopback|OpenVPN|Bluetooth)" -and $_.AddressState -eq "Preferred" 
+                }
+                if ($vpnIP) {
+                    $fortiDisplayIP = $vpnIP[0].IPAddress
+                    $fortiConnected = $true
                 }
             }
         }
 
-        if (![string]::IsNullOrEmpty($fortiDisplayIP)) {
+        if ($fortiConnected -and ![string]::IsNullOrEmpty($fortiDisplayIP)) {
             $lblSt3.Text = "● ĐÃ KẾT NỐI ($fortiDisplayIP)"
             $lblSt3.ForeColor = [System.Drawing.Color]::Green
         } else {
@@ -377,245 +349,162 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
-# Helper gửi tín hiệu ngắt kết nối qua OpenVPN Management Port (0 Admin)
-function Send-OpenVpnSignal([int]$port, [string]$signal = "SIGTERM") {
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $asyncResult = $client.BeginConnect("127.0.0.1", $port, $null, $null)
-        if ($asyncResult.AsyncWaitHandle.WaitOne(500, $false)) {
-            $client.EndConnect($asyncResult)
-            $stream = $client.GetStream()
-            $writer = New-Object System.IO.StreamWriter($stream)
-            $writer.AutoFlush = $true
-            $writer.WriteLine("signal $signal")
-            Start-Sleep -Milliseconds 200
-            $client.Close()
-            return $true
-        } else {
-            $client.Close()
-            return $false
-        }
-    } catch {
-        return $false
-    }
-}
-
-# Helper đồng bộ & kết nối OpenVPN Profile
+# Helper kết nối OpenVPN tiêu chuẩn
 function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFileName, $username, $password, $secret) {
     Log-Msg "-------------------------------------------"
     Log-Msg "Đang kết nối: $profileName (Tài khoản $username)..."
-    $otp = Get-TOTP -SecretKey $secret
-    if (-not $otp) {
-        Log-Msg "[-] Chưa có Secret Key cho $profileName."
-        return
+
+    # Tính OTP nếu có Secret Key
+    $otp = ""
+    if (-not [string]::IsNullOrWhiteSpace($secret)) {
+        $otp = Get-TOTP -SecretKey $secret
+        if ($otp) {
+            Log-Msg "-> Mã OTP ($profileName): $otp"
+        }
     }
-    Log-Msg "-> Mã OTP ${profileName}: $otp"
-    $fullPass = "$password$otp"
+    $fullPass = if ($otp) { "$password$otp" } else { $password }
 
-    # Dọn dẹp các thư mục con trùng lặp trong OpenVPN User Config
-    Get-ChildItem -Path $userOpenVpnDir -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-    # Đồng bộ file vào thư mục local của VPN_Manager
     $srcDir = Get-Absolute-Path $ovpnSubDir
-    if (-not (Test-Path $srcDir)) {
-        try { New-Item -ItemType Directory -Path $srcDir -Force | Out-Null } catch {}
-    }
-    Set-Content -Path (Join-Path $srcDir "auth.txt") -Value @($username, $fullPass) -Encoding ASCII
-
     $ovpnSrcFile = Join-Path $srcDir $ovpnFileName
     if (-not (Test-Path $ovpnSrcFile)) {
-        Log-Msg "[-] LỖI: Không tìm thấy file cấu hình OpenVPN ($ovpnSrcFile)"
+        Log-Msg "[-] LỖI: Không tìm thấy file $ovpnFileName trong $srcDir"
         return
     }
 
-    # Đồng bộ file vào thư mục OpenVPN User Config (Chạy qua Service 0 Admin)
+    # Ghi file thông tin xác thực vào thư mục OpenVPN
     $targetAuth = Join-Path $userOpenVpnDir "${configName}_auth.txt"
     $targetOvpn = Join-Path $userOpenVpnDir "${configName}.ovpn"
     Set-Content -Path $targetAuth -Value @($username, $fullPass) -Encoding ASCII
 
-    $mgmtPort = if ($configName -eq "sophos") { 7501 } else { 7502 }
+    # Sao chép và trỏ file .ovpn tới file auth
     $ovpnContent = Get-Content -Path $ovpnSrcFile -Raw
     $ovpnContent = $ovpnContent -replace "auth-user-pass.*", "auth-user-pass ${configName}_auth.txt"
-    if ($ovpnContent -notmatch "auth-retry\s+nointeract") {
-        $ovpnContent += "`r`nauth-retry nointeract`r`n"
-    }
-    if ($ovpnContent -notmatch "management\s+127\.0\.0\.1") {
-        $ovpnContent += "`r`nmanagement 127.0.0.1 $mgmtPort`r`n"
-    } else {
-        $ovpnContent = $ovpnContent -replace "management\s+127\.0\.0\.1\s+\d+", "management 127.0.0.1 $mgmtPort"
-    }
     Set-Content -Path $targetOvpn -Value $ovpnContent -Encoding UTF8
 
+    # Tự động copy Mật khẩu + OTP vào Clipboard để tiện sử dụng
+    if ($fullPass) {
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($fullPass)
+            Log-Msg "-> Đã copy [Mật khẩu + OTP] vào Clipboard."
+        } catch {}
+    }
+
+    # Chuẩn hóa chế độ kết nối:
+    # - Nếu có quyền Admin: Kết nối trực tiếp file cấu hình (${configName}.ovpn).
+    # - Nếu KHÔNG CÓ quyền Admin: Tự động tìm và kết nối profile sẵn trong C:\Program Files\OpenVPN\config\
+    #   để Windows OpenVPN Interactive Service tự cấp route mà không bị lỗi Access is denied.
+    $targetConnectName = "${configName}.ovpn"
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        $sysConfigDir = "C:\Program Files\OpenVPN\config"
+        if (Test-Path $sysConfigDir) {
+            $sysFiles = Get-ChildItem -Path $sysConfigDir -Filter "*.ovpn" -ErrorAction SilentlyContinue
+            foreach ($sf in $sysFiles) {
+                if ($sf.Name -eq "${configName}.ovpn" -or 
+                    ($configName -match "epay|dr" -and $sf.Name -match "epay|dr") -or 
+                    ($configName -match "sophos" -and $sf.Name -match "sophos")) {
+                    $targetConnectName = $sf.Name
+                    break
+                }
+            }
+        }
+    }
+
+    # Gọi OpenVPN GUI hoặc OpenVPN CLI kết nối bình thường
     if (Test-Path $openvpnGuiExe) {
-        # Đảm bảo OpenVPN GUI đang chạy ở khay hệ thống
         $guiProc = Get-Process -Name "openvpn-gui" -ErrorAction SilentlyContinue
         if (-not $guiProc) {
-            Start-Process -FilePath $openvpnGuiExe -WindowStyle Hidden
+            Start-Process -FilePath $openvpnGuiExe
             Start-Sleep -Milliseconds 800
         }
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command rescan" -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 300
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect ${configName}.ovpn" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--connect ${configName}.ovpn" -ErrorAction SilentlyContinue
-        Log-Msg "[OK] Đã gửi lệnh kết nối $profileName ngầm (0 Admin)!"
+        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect $targetConnectName" -ErrorAction SilentlyContinue
+        Log-Msg "[OK] Đã gửi lệnh kết nối $profileName qua OpenVPN GUI ($targetConnectName)!"
+    } elseif (Test-Path $openvpnExe) {
+        Start-Process -FilePath $openvpnExe -ArgumentList "--config `"$targetOvpn`"" -WindowStyle Hidden
+        Log-Msg "[OK] Đã khởi chạy $profileName qua OpenVPN CLI!"
     } else {
-        $ovpnPath = Join-Path $srcDir $ovpnFileName
-        $logPath = Join-Path $baseDir "${configName}.log"
-        Start-Process -FilePath $openvpnExe -ArgumentList "--config `"$ovpnPath`" --auth-user-pass `"$targetAuth`" --log `"$logPath`" --verb 3" -WorkingDirectory $srcDir -WindowStyle Hidden
-        Log-Msg "[OK] Đã gửi thông tin đăng nhập $profileName!"
+        Log-Msg "[-] LỖI: Không tìm thấy OpenVPN trên máy tính!"
     }
 }
 
-# Function ngắt kết nối toàn bộ VPN (Không đóng App)
+# Helper kết nối FortiClient
+function Connect-FortiClient {
+    Log-Msg "-------------------------------------------"
+    Log-Msg "Đang kết nối: FortiClient (Tài khoản $($cfg.forticlient.username))..."
+    $u = $cfg.forticlient.username
+    $p = $cfg.forticlient.password
+    $serverAddr = $cfg.forticlient.server
+    if ([string]::IsNullOrWhiteSpace($serverAddr)) { $serverAddr = "14.238.148.196:4443" }
+
+    $openConnectExe = Join-Path $baseDir "tools\openconnect.exe"
+    if (-not (Test-Path $openConnectExe)) {
+        $openConnectExe = "openconnect.exe"
+    }
+
+    $serverUrl = if ($serverAddr -match "^https?://") { $serverAddr } else { "https://$serverAddr" }
+    $certVal = $cfg.forticlient.servercert
+    if ([string]::IsNullOrWhiteSpace($certVal)) { $certVal = "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio=" }
+
+    $passFile = Join-Path $baseDir "tools\oc_pass.txt"
+    Set-Content -Path $passFile -Value $p -Encoding ASCII
+
+    $runBat = Join-Path $baseDir "tools\run_forti.bat"
+    $toolsDir = Join-Path $baseDir "tools"
+    $logFile = Join-Path $baseDir "forti_openconnect.log"
+    $batContent = "@echo off`r`ncd /d `"$toolsDir`"`r`ntype `"$passFile`" | `"$openConnectExe`" --protocol=fortinet --no-dtls -u `"$u`" --passwd-on-stdin $serverUrl --servercert `"$certVal`" --non-inter > `"$logFile`" 2>&1"
+    Set-Content -Path $runBat -Value $batContent -Encoding ASCII
+
+    # Chạy Task nếu đã đăng ký (0 Admin), hoặc khởi chạy process
+    $useTask = $false
+    try {
+        $chk = schtasks.exe /query /tn "VPN_Manager_FortiClient" 2>$null
+        if ($chk -match "VPN_Manager_FortiClient") {
+            schtasks.exe /run /tn "VPN_Manager_FortiClient" 2>$null | Out-Null
+            $useTask = $true
+        }
+    } catch {}
+
+    if (-not $useTask) {
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$runBat`"" -WorkingDirectory $toolsDir -WindowStyle Hidden
+    }
+    Log-Msg "[OK] Đã gửi lệnh kết nối FortiClient!"
+}
+
+# Function ngắt kết nối toàn bộ VPN
 function Stop-AllVPN {
     Log-Msg "-------------------------------------------"
-    Log-Msg "Đang gửi lệnh ngắt kết nối TOÀN BỘ VPN..."
+    Log-Msg "Đang ngắt kết nối TOÀN BỘ VPN..."
 
-    # 1. Gửi tín hiệu ngắt kết nối SIGTERM qua Management Port cho Sophos (7501) và DR Epay (7502)
-    Send-OpenVpnSignal 7501 "SIGTERM" | Out-Null
-    Send-OpenVpnSignal 7502 "SIGTERM" | Out-Null
-
-    # 2. Gửi lệnh ngắt kết nối tới OpenVPN GUI Client cho tất cả profile candidate
+    # Gửi lệnh disconnect tới OpenVPN GUI nếu có
     if (Test-Path $openvpnGuiExe) {
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect sophos.ovpn" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect sophos" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect epay-dr.ovpn" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect epay-dr" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect dr-epay-vpn-UDP4-1195-config.ovpn" -ErrorAction SilentlyContinue
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect dr-epay-vpn-UDP4-1195-config" -ErrorAction SilentlyContinue
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect_all" -ErrorAction SilentlyContinue
     }
 
-    # 3. Ép dừng các tiến trình openvpn.exe qua WMI (Hoạt động 100% không cần Admin)
-    try {
-        Get-WmiObject Win32_Process -Filter "Name = 'openvpn.exe'" -ErrorAction SilentlyContinue | ForEach-Object { $_.Terminate() }
-    } catch {}
+    # Dừng các tiến trình VPN CLI nền
+    Stop-Process -Name "openvpn", "openconnect" -Force -ErrorAction SilentlyContinue
+    try { schtasks.exe /end /tn "VPN_Manager_FortiClient" 2>$null | Out-Null } catch {}
 
-    # 4. Release IP trên Card mạng OpenVPN TAP
-    try { Start-Process -FilePath "ipconfig.exe" -ArgumentList "/release `"OpenVPN TAP-Windows6`"" -WindowStyle Hidden -ErrorAction SilentlyContinue } catch {}
-
-    # 5. Gửi lệnh ngắt OpenConnect cho FortiClient
-    try {
-        schtasks.exe /end /tn "VPN_Manager_FortiClient" 2>$null | Out-Null
-        Get-WmiObject Win32_Process -Filter "Name = 'openconnect.exe'" -ErrorAction SilentlyContinue | ForEach-Object { $_.Terminate() }
-        Get-WmiObject Win32_Process -Filter "Name = 'openfortivpn-go.exe'" -ErrorAction SilentlyContinue | ForEach-Object { $_.Terminate() }
-    } catch {}
-
-    Log-Msg "[OK] Đã gửi lệnh ngắt kết nối toàn bộ VPN thành công!"
-    Log-Msg "[✓] Giao diện quản lý vẫn mở để bạn có thể kết nối lại bất cứ lúc nào."
+    Log-Msg "[OK] Đã ngắt kết nối VPN thành công!"
 }
 
 # Function thực thi kết nối các VPN đã chọn
 function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
-    if ($do1 -or $do2) {
-        if (Test-Path $openvpnGuiExe) {
-            Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect_all" -ErrorAction SilentlyContinue
-        }
-        Stop-Process -Name "openvpn" -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 300
-    }
-
-    # 1. Sophos SSL VPN
     if ($do1) {
         Connect-OpenVpnProfile "1. Sophos SSL VPN" "sophos" $cfg.sophos.dir $cfg.sophos.ovpnFile $cfg.sophos.username $cfg.sophos.password $cfg.sophos.secret
-        if ($do2 -or $do3) { Start-Sleep -Seconds 2 }
+        if ($do2 -or $do3) { Start-Sleep -Seconds 1 }
     }
 
-    # 2. OpenVPN DR Epay
     if ($do2) {
         Connect-OpenVpnProfile "2. OpenVPN (VPN DR Epay)" "epay-dr" $cfg.openvpn_dr.dir $cfg.openvpn_dr.ovpnFile $cfg.openvpn_dr.username $cfg.openvpn_dr.password $cfg.openvpn_dr.secret
-        if ($do3) { Start-Sleep -Seconds 2 }
+        if ($do3) { Start-Sleep -Seconds 1 }
     }
 
-    # 3. FortiClient (OpenConnect Duy Nhất)
     if ($do3) {
-        Log-Msg "-------------------------------------------"
-        Log-Msg "Đang kết nối: 3. FortiClient qua OpenConnect (Tài khoản $($cfg.forticlient.username))..."
-        $u = $cfg.forticlient.username
-        $p = $cfg.forticlient.password
-
-        $serverAddr = $cfg.forticlient.server
-        if ([string]::IsNullOrWhiteSpace($serverAddr)) {
-            $serverAddr = "14.238.148.196:4443"
-            try {
-                $regServer = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Production" -Name "Server" -ErrorAction SilentlyContinue).Server
-                if (![string]::IsNullOrWhiteSpace($regServer)) { $serverAddr = $regServer }
-            } catch {}
-        }
-        
-        # Tìm kiếm duy nhất openconnect.exe
-        $openConnectExe = @(
-            (Join-Path $baseDir "tools\openconnect.exe"),
-            (Join-Path $baseDir "openconnect.exe"),
-            "C:\Program Files\OpenConnect GUI\openconnect.exe",
-            "C:\Program Files (x86)\OpenConnect GUI\openconnect.exe",
-            "C:\Program Files\OpenConnect\openconnect.exe",
-            "C:\Program Files (x86)\OpenConnect\openconnect.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-        if (-not $openConnectExe) {
-            $cmdCheck = Get-Command "openconnect.exe" -ErrorAction SilentlyContinue
-            if ($cmdCheck) { $openConnectExe = $cmdCheck.Source }
-        }
-
-        if ($openConnectExe) {
-            Log-Msg "-> Tìm thấy OpenConnect CLI: $openConnectExe"
-            Log-Msg "-> Khởi chạy kết nối ngầm Fortinet SSL VPN tới $serverAddr..."
-            
-            $serverUrl = if ($serverAddr -match "^https?://") { $serverAddr } else { "https://$serverAddr" }
-            $certVal = $cfg.forticlient.servercert
-            if ([string]::IsNullOrWhiteSpace($certVal)) { $certVal = "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio=" }
-            $certArg = "--servercert `"$certVal`" --non-inter"
-            
-            $logFile = Join-Path $baseDir "forti_openconnect.log"
-            if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
-
-            $passFile = Join-Path $baseDir "tools\oc_pass.txt"
-            Set-Content -Path $passFile -Value $p -Encoding ASCII
-
-            # Tạo file bat chạy ngầm để Task Scheduler hoặc Start-Process gọi
-            $runBat = Join-Path $baseDir "tools\run_forti.bat"
-            $toolsDir = Join-Path $baseDir "tools"
-            $batContent = "@echo off`r`ncd /d `"$toolsDir`"`r`ntype `"$passFile`" | `"$openConnectExe`" --protocol=fortinet --no-dtls -u `"$u`" --passwd-on-stdin $serverUrl $certArg > `"$logFile`" 2>&1"
-            Set-Content -Path $runBat -Value $batContent -Encoding ASCII
-
-            # Thử chạy qua Scheduled Task nếu đã đăng ký (Không cần Admin)
-            $taskName = "VPN_Manager_FortiClient"
-            $useTask = $false
-            try {
-                $chk = schtasks.exe /query /tn $taskName 2>$null
-                if ($chk -match $taskName) {
-                    schtasks.exe /run /tn $taskName 2>$null | Out-Null
-                    $useTask = $true
-                }
-            } catch {}
-
-            if (-not $useTask) {
-                # Chạy trực tiếp qua cmd.exe nếu chưa đăng ký Task
-                $cmdArgs = "/c `"$runBat`""
-                Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArgs -WorkingDirectory $toolsDir -WindowStyle Hidden
-            }
-            
-            # Đọc nhật ký thực tế vừa ghi để đưa lên khung Log
-            Start-Sleep -Seconds 4
-            if (Test-Path $logFile) {
-                $lines = Get-Content $logFile -ErrorAction SilentlyContinue
-                foreach ($l in $lines) {
-                    if (![string]::IsNullOrWhiteSpace($l)) {
-                        Log-Msg "   [OpenConnect] $l"
-                    }
-                }
-            }
-            Log-Msg "[OK] Đã phát lệnh kết nối OpenConnect! Theo dõi trạng thái đèn màu xanh ở trên."
-        } else {
-            Log-Msg "[-] LỖI: KHÔNG TÌM THẤY openconnect.exe!"
-            Log-Msg "[!] Vui lòng đảm bảo file openconnect.exe nằm trong thư mục tools\\"
-            return
-        }
+        Connect-FortiClient
     }
 
     Log-Msg "-------------------------------------------"
-    Log-Msg "[✓] HOÀN TẤT GỬI LỆNH KẾT NỐI! Hãy theo dõi trạng thái đèn màu xanh ở trên."
+    Log-Msg "[✓] Hoàn tất gửi yêu cầu kết nối."
 }
 
 # --- SỰ KIỆN NÚT BẤM ---
@@ -623,21 +512,15 @@ $btnConnect.Add_Click({ Do-Connect $chk1.Checked $chk2.Checked $chk3.Checked })
 $btnAll.Add_Click({
     $chk1.Checked = $true
     $chk2.Checked = $true
-    $canForti = (Test-FortiCapability).Available
-    if ($canForti) {
-        $chk3.Checked = $true
-        Do-Connect $true $true $true
-    } else {
-        $chk3.Checked = $false
-        Do-Connect $true $true $false
-    }
+    $chk3.Checked = $true
+    Do-Connect $true $true $true
 })
 $btnDisconnect.Add_Click({ Stop-AllVPN })
 
-# Popup Cai dat Tai khoan, Mat khau va Secret Key
+# Popup Cài đặt Tài khoản, Mật khẩu và Secret Key
 $btnConfig.Add_Click({
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = "Cài Đặt Đầy Đủ Thông Tin Đăng Nhập & Tùy Chọn Mặc Định"
+    $dlg.Text = "Cài Đặt Tài Khoản & Mật Khẩu VPN"
     $dlg.Size = New-Object System.Drawing.Size(530, 620)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -659,7 +542,7 @@ $btnConfig.Add_Click({
     $l1s = New-Object System.Windows.Forms.Label; $l1s.Text = "Secret Key:"; $l1s.Location = "15,85"; $l1s.Size = "90,20"; $grp1.Controls.Add($l1s)
     $t1s = New-Object System.Windows.Forms.TextBox; $t1s.Location = "110,83"; $t1s.Size = "350,23"; $t1s.Text = $cfg.sophos.secret; $grp1.Controls.Add($t1s)
 
-    $c1e = New-Object System.Windows.Forms.CheckBox; $c1e.Text = "Mặc định tích chọn kết nối khi mở phần mềm"; $c1e.Location = "110,118"; $c1e.Size = "350,24"
+    $c1e = New-Object System.Windows.Forms.CheckBox; $c1e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c1e.Location = "110,118"; $c1e.Size = "350,24"
     $c1e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c1e.Checked = [bool]$cfg.sophos.enabled; $grp1.Controls.Add($c1e)
 
     # 2. VPN DR Epay
@@ -677,7 +560,7 @@ $btnConfig.Add_Click({
     $l2s = New-Object System.Windows.Forms.Label; $l2s.Text = "Secret Key:"; $l2s.Location = "15,85"; $l2s.Size = "90,20"; $grp2.Controls.Add($l2s)
     $t2s = New-Object System.Windows.Forms.TextBox; $t2s.Location = "110,83"; $t2s.Size = "350,23"; $t2s.Text = $cfg.openvpn_dr.secret; $grp2.Controls.Add($t2s)
 
-    $c2e = New-Object System.Windows.Forms.CheckBox; $c2e.Text = "Mặc định tích chọn kết nối khi mở phần mềm"; $c2e.Location = "110,118"; $c2e.Size = "350,24"
+    $c2e = New-Object System.Windows.Forms.CheckBox; $c2e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c2e.Location = "110,118"; $c2e.Size = "350,24"
     $c2e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c2e.Checked = [bool]$cfg.openvpn_dr.enabled; $grp2.Controls.Add($c2e)
 
     # 3. FortiClient
@@ -692,7 +575,7 @@ $btnConfig.Add_Click({
     $l3p = New-Object System.Windows.Forms.Label; $l3p.Text = "Mật khẩu:"; $l3p.Location = "15,55"; $l3p.Size = "90,20"; $grp3.Controls.Add($l3p)
     $t3p = New-Object System.Windows.Forms.TextBox; $t3p.Location = "110,53"; $t3p.Size = "350,23"; $t3p.Text = $cfg.forticlient.password; $grp3.Controls.Add($t3p)
 
-    $c3e = New-Object System.Windows.Forms.CheckBox; $c3e.Text = "Mặc định tích chọn kết nối khi mở phần mềm"; $c3e.Location = "110,88"; $c3e.Size = "350,24"
+    $c3e = New-Object System.Windows.Forms.CheckBox; $c3e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c3e.Location = "110,88"; $c3e.Size = "350,24"
     $c3e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c3e.Checked = [bool]$cfg.forticlient.enabled; $grp3.Controls.Add($c3e)
 
     # Nút Lưu Cấu Hình
@@ -720,19 +603,19 @@ $btnConfig.Add_Click({
 
         Save-Config $cfg
 
-        # Đồng bộ trực tiếp về checkbox màn hình chính
+        # Đồng bộ checkbox màn hình chính
         $chk1.Checked = $c1e.Checked
         $chk2.Checked = $c2e.Checked
         $chk3.Checked = $c3e.Checked
 
-        Log-Msg "[+] Đã lưu cấu hình Tài khoản, Mật khẩu & Tùy chọn mặc định thành công!"
+        Log-Msg "[+] Đã lưu cấu hình tài khoản & mật khẩu thành công!"
         $dlg.Close()
     })
     $dlg.Controls.Add($btnSave)
     $dlg.ShowDialog()
 })
 
-Log-Msg "Hệ thống đã sẵn sàng."
+Log-Msg "Hệ thống sẵn sàng."
 Log-Msg "1. Sophos SFOS: Tài khoản $($cfg.sophos.username)"
 Log-Msg "2. VPN DR Epay: Tài khoản $($cfg.openvpn_dr.username)"
 Log-Msg "3. FortiClient: Tài khoản $($cfg.forticlient.username)"
