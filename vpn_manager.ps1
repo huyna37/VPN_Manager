@@ -297,7 +297,8 @@ if (-not [string]::IsNullOrWhiteSpace($targetProfileKey)) {
         if (-not (Test-Path $fortiExe)) { $fortiExe = "C:\Program Files (x86)\Fortinet\FortiClient\FortiClient.exe" }
 
         if (Test-Path $fortiExe) {
-            Start-Process -FilePath $fortiExe -ErrorAction SilentlyContinue
+            $fortiDir = Split-Path -Path $fortiExe -Parent
+            Start-Process -FilePath $fortiExe -WorkingDirectory $fortiDir -ErrorAction SilentlyContinue
             Show-Quick-Toast "FortiClient Office SSO" "" "" 0
         } else {
             [System.Windows.Forms.MessageBox]::Show("Da dong bo cau hinh FortiClient Office SSO vao Registry!`nVui long cai dat FortiClient tren may tinh nay de ket noi.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -1343,8 +1344,9 @@ function Connect-FortiOffice {
 
     if (Test-Path $fortiExe) {
         # Khoi chay giao dien FortiClient de nguoi dung xac thuc SSO 1-Click tren trinh duyet
-        Start-Process -FilePath $fortiExe -ErrorAction SilentlyContinue
-        Log-Msg "[OK] Da mo FortiClient. Hay chon profile 'Office' va bam SAML Login tren trinh duyet!"
+        $fortiDir = Split-Path -Path $fortiExe -Parent
+        Start-Process -FilePath $fortiExe -WorkingDirectory $fortiDir -ErrorAction SilentlyContinue
+        Log-Msg "[OK] Đã mở FortiClient. Hãy chọn profile 'Office' và bấm SAML Login trên trình duyệt!"
     } else {
         # Neu may chua cai FortiClient GUI, thong bao va ho tro mo link dang nhap
         Log-Msg "[!] Luu y: Chua tim thay FortiClient.exe tai duong dan mac dinh."
