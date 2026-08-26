@@ -1,4 +1,5 @@
-﻿param(
+# Tham so dong lenh ho tro goi tu phim tat hoac bat widget nhanh
+param(
     [string]$Copy = "",
     [string]$CopyProfile = ""
 )
@@ -7,8 +8,10 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic
 
-# Xac dinh thu muc ung dung & file cau hinh
+
+# Xac dinh thu muc ung dung & file cau hinh (Dong 100% tren moi may & EXE)
 $baseDir = $env:VPN_MANAGER_APP_DIR
 if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = $PSScriptRoot }
 if ([string]::IsNullOrEmpty($baseDir)) { $baseDir = [System.AppDomain]::CurrentDomain.BaseDirectory }
@@ -21,16 +24,10 @@ function Get-Absolute-Path([string]$path) {
 }
 
 $configFile = Join-Path $baseDir "vpn_config.json"
-$ps1File = Join-Path $baseDir "vpn_manager.ps1"
-$exeFile = Join-Path $baseDir "VPN_Manager.exe"
-
 $openvpnExe = "C:\Program Files\OpenVPN\bin\openvpn.exe"
 $openvpnGuiExe = "C:\Program Files\OpenVPN\bin\openvpn-gui.exe"
 if (-not (Test-Path $openvpnGuiExe)) {
     $openvpnGuiExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn-gui.exe"
-}
-if (-not (Test-Path $openvpnExe)) {
-    $openvpnExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn.exe"
 }
 
 $userOpenVpnDir = Join-Path $env:USERPROFILE "OpenVPN\config"
@@ -38,15 +35,15 @@ if (-not (Test-Path $userOpenVpnDir)) {
     try { New-Item -ItemType Directory -Path $userOpenVpnDir -Force | Out-Null } catch {}
 }
 
-# Doc & Luu cau hinh JSON
+# Doc & Luu cau hinh JSON (Mac dinh de trong, doc truc tiep tu file vpn_config.json)
 function Get-Default-Config {
     return [PSCustomObject]@{
         sophos = [PSCustomObject]@{
             enabled = $true
-            name = "1. Sophos SSL VPN"
-            username = ""
-            password = ""
-            secret = ""
+            name = "1. Sophos SSL VPN (SFOS)"
+            username = "" # Tai khoan cau hinh trong vpn_config.json
+            password = "" # Mat khau cau hinh trong vpn_config.json
+            secret = ""   # Secret Key TOTP trong vpn_config.json
             dir = "config\sophos"
             configName = "sophos"
             ovpnFile = "sophos.ovpn"
@@ -54,21 +51,31 @@ function Get-Default-Config {
         openvpn_dr = [PSCustomObject]@{
             enabled = $true
             name = "2. OpenVPN (VPN DR Epay)"
-            username = ""
-            password = ""
-            secret = ""
+            username = "" # Tai khoan cau hinh trong vpn_config.json
+            password = "" # Mat khau cau hinh trong vpn_config.json
+            secret = ""   # Secret Key TOTP trong vpn_config.json
             dir = "config\epay-dr"
             configName = "epay-dr"
             ovpnFile = "epay-dr.ovpn"
         }
         forticlient = [PSCustomObject]@{
             enabled = $false
-            name = "3. FortiClient"
-            username = ""
-            password = ""
-            secret = ""
+            name = "3. FortiClient (Production)"
+            username = "" # Tai khoan cau hinh trong vpn_config.json
+            password = "" # Mat khau cau hinh trong vpn_config.json
             server = "14.238.148.196:4443"
             servercert = "pin-sha256:zJcknXTR0B49qZAztOTh7VW80yIwZYdPCWwm2mio="
+            exePath = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
+        }
+        forti_office = [PSCustomObject]@{
+            enabled = $true
+            name = "4. FortiClient (Office SSO)"
+            tunnelName = "Office"
+            server = "118.70.184.195:4443"
+            servercert = "pin-sha256:7/VKi6b/toR0oi4GostxJ6homRPtXwDw44uT/Myh41o="
+            sso = $true
+            useExternalBrowser = $true
+            exePath = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
         }
     }
 }
@@ -77,7 +84,15 @@ function Load-Config {
     if (Test-Path $configFile) {
         try {
             $parsed = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($parsed) { return $parsed }
+            if ($parsed) {
+                # Bo sung cac truong mac dinh neu file json cu chua co
+                $def = Get-Default-Config
+                if (-not $parsed.sophos) { $parsed | Add-Member -NotePropertyName "sophos" -NotePropertyValue $def.sophos }
+                if (-not $parsed.openvpn_dr) { $parsed | Add-Member -NotePropertyName "openvpn_dr" -NotePropertyValue $def.openvpn_dr }
+                if (-not $parsed.forticlient) { $parsed | Add-Member -NotePropertyName "forticlient" -NotePropertyValue $def.forticlient }
+                if (-not $parsed.forti_office) { $parsed | Add-Member -NotePropertyName "forti_office" -NotePropertyValue $def.forti_office }
+                return $parsed
+            }
         } catch {}
     }
     return Get-Default-Config
@@ -86,6 +101,81 @@ function Load-Config {
 function Save-Config($cfgData) {
     $cfgData | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Encoding UTF8
 }
+
+# Ham dang ky / dong bo cau hinh FortiClient Office SSO vao Windows Registry
+function Register-FortiTunnels {
+    param([bool]$verboseLog = $true)
+    $regSuccess = $false
+    try {
+        # Dam bao cac khoa goc cua FortiClient ton tai de tranh loi Electron Logger (TraceLog)
+        $hkcuRoot = "HKCU:\SOFTWARE\Fortinet\FortiClient"
+        if (-not (Test-Path $hkcuRoot)) { New-Item -Path $hkcuRoot -Force | Out-Null }
+        Set-ItemProperty -Path $hkcuRoot -Name "installed" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuRoot -Name "TraceLog" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+
+        $hkcuSettings = "HKCU:\SOFTWARE\Fortinet\FortiClient\FA_SETTINGS"
+        if (-not (Test-Path $hkcuSettings)) { New-Item -Path $hkcuSettings -Force | Out-Null }
+        Set-ItemProperty -Path $hkcuSettings -Name "installed" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuSettings -Name "enabled" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuSettings -Name "logenabled" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuSettings -Name "loglevel" -Value 6 -Type DWord -ErrorAction SilentlyContinue
+
+        # Profile Office (SSO SAML qua trinh duyet)
+        $officeServer = if ($cfg.forti_office.server) { $cfg.forti_office.server } else { "118.70.184.195:4443" }
+        $hkcuOffice = "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
+        if (-not (Test-Path $hkcuOffice)) { New-Item -Path $hkcuOffice -Force | Out-Null }
+        Set-ItemProperty -Path $hkcuOffice -Name "Description" -Value "" -Type String -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "Server" -Value $officeServer -Type String -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "ServerSorted" -Value $officeServer -Type String -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "sso_enabled" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "use_external_browser" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "azure_auto_login" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "ServerCert" -Value "1" -Type String -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "promptusername" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "promptcertificate" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "dual_stack" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "SavePass" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuOffice -Name "DATA3" -Value "" -Type String -ErrorAction SilentlyContinue
+
+        # Import file .reg cua Office neu co trong config\forti
+        $officeReg = Join-Path $baseDir "config\forti\FortiClient_Office_SSO.reg"
+        if (Test-Path $officeReg) {
+            Start-Process -FilePath "reg.exe" -ArgumentList "import `"$officeReg`"" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        }
+
+        $regSuccess = $true
+        if ($verboseLog) {
+            Log-Msg "[OK REGISTRY] Da tu dong nap cau hinh FortiClient Office SSO vao may tinh nay!"
+        }
+    } catch {
+        if ($verboseLog) {
+            Log-Msg "[-] Canh bao Registry: $($_.Exception.Message)"
+        }
+    }
+    return $regSuccess
+}
+
+# Ham xoa bo cau hinh FortiClient Office SSO khoi Windows Registry khi thoat ung dung
+function Unregister-FortiTunnels {
+    try {
+        $hkcuOffice = "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
+        if (Test-Path $hkcuOffice) {
+            Remove-Item -Path $hkcuOffice -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $hklmOffice = "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
+        if (Test-Path $hklmOffice) {
+            Remove-Item -Path $hklmOffice -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        # Fallback truc tiep bang reg.exe
+        Start-Process -FilePath "reg.exe" -ArgumentList "delete `"HKCU\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office`" /f" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        Start-Process -FilePath "reg.exe" -ArgumentList "delete `"HKLM\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office`" /f" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+# Tu dong dang ky don dep Registry khi tien trinh ket thuc
+[System.AppDomain]::CurrentDomain.add_ProcessExit({
+    Unregister-FortiTunnels
+})
 
 # Ham tinh TOTP 6 so tu Secret Key Base32
 function Get-TOTP {
@@ -154,7 +244,6 @@ function Show-Quick-Toast([string]$title, [string]$passOtp, [string]$otp, [int]$
         $toast.Controls.Add($lbl1)
 
         $lbl2 = New-Object System.Windows.Forms.Label
-        $lbl2.Text = "[OK] DA COPY MAT KHAU + OTP VAO CLIPBOARD!"
         $lbl2.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
         $lbl2.ForeColor = [System.Drawing.Color]::FromArgb(74, 222, 128)
         $lbl2.Location = New-Object System.Drawing.Point(15, 32)
@@ -162,13 +251,19 @@ function Show-Quick-Toast([string]$title, [string]$passOtp, [string]$otp, [int]$
         $toast.Controls.Add($lbl2)
 
         $lbl3 = New-Object System.Windows.Forms.Label
-        $otpText = if ($otp) { "Ma OTP: " + $otp + " (Het han sau " + $rem + "s)" } else { "Mat khau da san sang de Dan (Ctrl+V)" }
-        $lbl3.Text = $otpText
         $lbl3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
         $lbl3.ForeColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
         $lbl3.Location = New-Object System.Drawing.Point(15, 58)
         $lbl3.Size = New-Object System.Drawing.Size(320, 20)
         $toast.Controls.Add($lbl3)
+
+        if (-not [string]::IsNullOrEmpty($passOtp)) {
+            $lbl2.Text = "[OK] ĐÃ COPY MẬT KHẨU + OTP VÀO CLIPBOARD!"
+            $lbl3.Text = if ($otp) { "Mã OTP: " + $otp + " (Hết hạn sau " + $rem + "s)" } else { "Mật khẩu đã sẵn sàng để Dán (Ctrl+V)" }
+        } else {
+            $lbl2.Text = "[OK] ĐÃ KHỞI CHẠY FORTICLIENT OFFICE SSO!"
+            $lbl3.Text = "Hãy bấm 'SAML Login' trên FortiClient để xác thực SSO."
+        }
 
         $tTimer = New-Object System.Windows.Forms.Timer
         $tTimer.Interval = 1400
@@ -192,13 +287,31 @@ function Show-Quick-Toast([string]$title, [string]$passOtp, [string]$otp, [int]$
 $targetProfileKey = if ($Copy) { $Copy } else { $CopyProfile }
 if (-not [string]::IsNullOrWhiteSpace($targetProfileKey)) {
     $cCfg = Load-Config
+
+    # Xu ly rieng cho FortiClient Office SSO (Khong dung user/pass ma mo giao dien FortiClient)
+    if ($targetProfileKey -match "4|office|sso") {
+        $cfg = $cCfg
+        Register-FortiTunnels -verboseLog $false | Out-Null
+        $fortiExe = $cCfg.forti_office.exePath
+        if (-not (Test-Path $fortiExe)) { $fortiExe = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe" }
+        if (-not (Test-Path $fortiExe)) { $fortiExe = "C:\Program Files (x86)\Fortinet\FortiClient\FortiClient.exe" }
+
+        if (Test-Path $fortiExe) {
+            Start-Process -FilePath $fortiExe -ErrorAction SilentlyContinue
+            Show-Quick-Toast "FortiClient Office SSO" "" "" 0
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Da dong bo cau hinh FortiClient Office SSO vao Registry!`nVui long cai dat FortiClient tren may tinh nay de ket noi.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+        exit 0
+    }
+
     $prof = $null
     if ($cCfg.$targetProfileKey) {
         $prof = $cCfg.$targetProfileKey
     } else {
         if ($targetProfileKey -match "1|sophos") { $prof = $cCfg.sophos }
         elseif ($targetProfileKey -match "2|epay|dr|openvpn") { $prof = $cCfg.openvpn_dr }
-        elseif ($targetProfileKey -match "3|forti") { $prof = $cCfg.forticlient }
+        elseif ($targetProfileKey -match "3|forti.*prod|hanh") { $prof = $cCfg.forticlient }
     }
 
     if ($prof) {
@@ -237,12 +350,11 @@ $cfg = Load-Config
 # --- GIAO DIEN CHINH ---
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "VPN Multi-Connect Manager"
-$form.Size = New-Object System.Drawing.Size(590, 715)
+$form.Size = New-Object System.Drawing.Size(590, 780)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $form.Add_Shown({
     $form.Activate()
     $form.BringToFront()
@@ -256,7 +368,7 @@ $pnlHeader.BackColor = [System.Drawing.Color]::FromArgb(20, 70, 120)
 $form.Controls.Add($pnlHeader)
 
 $lblTitle = New-Object System.Windows.Forms.Label
-$lblTitle.Text = "QUAN LY KET NOI VPN VA OTP"
+$lblTitle.Text = "QUẢN LÝ KẾT NỐI VPN, SSO VÀ OTP"
 $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblTitle.ForeColor = [System.Drawing.Color]::White
 $lblTitle.Location = New-Object System.Drawing.Point(20, 10)
@@ -264,7 +376,7 @@ $lblTitle.Size = New-Object System.Drawing.Size(540, 25)
 $pnlHeader.Controls.Add($lblTitle)
 
 $lblSub = New-Object System.Windows.Forms.Label
-$lblSub.Text = "Quick Copy Pass+OTP, Widget Icon Noi va Tu Dong Ket Noi"
+$lblSub.Text = "Tự động kết nối OpenVPN, FortiClient SSO Browser và Copy Pass+OTP 1-Click"
 $lblSub.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
 $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(200, 225, 250)
 $lblSub.Location = New-Object System.Drawing.Point(20, 35)
@@ -273,21 +385,21 @@ $pnlHeader.Controls.Add($lblSub)
 
 # Group Danh sach VPN
 $grpVPN = New-Object System.Windows.Forms.GroupBox
-$grpVPN.Text = "  Danh Sach VPN & Phim Tat Copy Pass+OTP  "
+$grpVPN.Text = "  Danh Sách VPN && Trạng Thái Trực Tiếp  "
 $grpVPN.Location = New-Object System.Drawing.Point(20, 75)
-$grpVPN.Size = New-Object System.Drawing.Size(535, 230)
+$grpVPN.Size = New-Object System.Drawing.Size(535, 295)
 $grpVPN.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $form.Controls.Add($grpVPN)
 
 # Nhat ky hien thi
 $lblLog = New-Object System.Windows.Forms.Label
-$lblLog.Text = "Nhat ky hoat dong:"
-$lblLog.Location = New-Object System.Drawing.Point(20, 410)
+$lblLog.Text = "Nhật ký hoạt động:"
+$lblLog.Location = New-Object System.Drawing.Point(20, 475)
 $lblLog.Size = New-Object System.Drawing.Size(200, 18)
 $form.Controls.Add($lblLog)
 
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(20, 430)
+$txtLog.Location = New-Object System.Drawing.Point(20, 495)
 $txtLog.Size = New-Object System.Drawing.Size(535, 230)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
@@ -394,6 +506,7 @@ function Show-FloatingWidget([string]$profKey) {
     $yOffset = 100
     if ($profKey -eq "openvpn_dr") { $yOffset = 185 }
     elseif ($profKey -eq "forticlient") { $yOffset = 270 }
+    elseif ($profKey -eq "forti_office") { $yOffset = 355 }
     $wForm.Location = New-Object System.Drawing.Point(($screenArea.Right - 285), $yOffset)
 
     # Tieu de VPN
@@ -446,7 +559,7 @@ function Show-FloatingWidget([string]$profKey) {
 
     # Nhan goi y bam
     $wLblHint = New-Object System.Windows.Forms.Label
-    $wLblHint.Text = "(Click de Copy Pass+OTP)"
+    $wLblHint.Text = if ($profKey -eq "forti_office") { "(Click để Mở FortiClient SSO)" } else { "(Click để Copy Pass+OTP)" }
     $wLblHint.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Italic)
     $wLblHint.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
     $wLblHint.Location = New-Object System.Drawing.Point(10, 50)
@@ -465,14 +578,23 @@ function Show-FloatingWidget([string]$profKey) {
             $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(74, 222, 128)
         }
     } else {
-        $wLblOtp.Text = "Khong dung OTP"
-        $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+        if ($profKey -eq "forti_office") {
+            $wLblOtp.Text = "SSO Browser Login"
+            $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(56, 189, 248)
+        } else {
+            $wLblOtp.Text = "Không dùng OTP"
+            $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+        }
     }
 
-    # Ham thuc thi Copy khi click vao Widget
+    # Ham thuc thi Copy / Mo khi click vao Widget
     $doCopyWidget = {
         param($s, $e)
         $curK = [string]$wForm.Tag
+        if ($curK -eq "forti_office") {
+            Connect-FortiOffice
+            return
+        }
         $pObj = $cfg.$curK
         if (-not $pObj) { return }
         $sec = $pObj.secret
@@ -483,14 +605,14 @@ function Show-FloatingWidget([string]$profKey) {
         $fullPass = if ($otp) { "$p$otp" } else { $p }
 
         if ([string]::IsNullOrEmpty($fullPass)) {
-            [System.Windows.Forms.MessageBox]::Show("Chua co mat khau cho $targetName!`nVui long bam 'Cai dat' de nhap.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            [System.Windows.Forms.MessageBox]::Show("Chưa có mật khẩu cho $targetName!`nVui lòng bấm 'Cài đặt' để nhập.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
         try {
             [System.Windows.Forms.Clipboard]::SetText($fullPass)
             $wForm.BackColor = [System.Drawing.Color]::FromArgb(22, 101, 52)
-            $wLblTitle.Text = "[DA CHEP PASS+OTP!]"
+            $wLblTitle.Text = "[ĐÃ CHÉP PASS+OTP!]"
             $wLblTitle.ForeColor = [System.Drawing.Color]::White
 
             $flashTimer = New-Object System.Windows.Forms.Timer
@@ -505,9 +627,9 @@ function Show-FloatingWidget([string]$profKey) {
             $flashTimer.Start()
             $rem = 30 - ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() % 30)
             if ($otp) {
-                Log-Msg "[OK WIDGET] Da copy Pass+OTP cua $targetName! (OTP: " + $otp + " - Con " + $rem + "s)"
+                Log-Msg "[OK WIDGET] Đã copy Pass+OTP của $targetName! (OTP: " + $otp + " - Còn " + $rem + "s)"
             } else {
-                Log-Msg "[OK WIDGET] Da copy Mat khau cua $targetName vao Clipboard!"
+                Log-Msg "[OK WIDGET] Đã copy Mật khẩu của $targetName vào Clipboard!"
             }
         } catch {}
     }.GetNewClosure()
@@ -577,8 +699,13 @@ function Show-FloatingWidget([string]$profKey) {
                 $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(74, 222, 128)
             }
         } else {
-            $wLblOtp.Text = "Khong dung OTP"
-            $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+            if ($curK -eq "forti_office") {
+                $wLblOtp.Text = "SSO Browser Login"
+                $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(56, 189, 248)
+            } else {
+                $wLblOtp.Text = "Khong dung OTP"
+                $wLblOtp.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+            }
         }
     }.GetNewClosure())
     $wTimer.Start()
@@ -595,7 +722,7 @@ function Show-FloatingWidget([string]$profKey) {
 
     $global:activeWidgets[$profKey] = $wForm
     $wForm.Show()
-    Log-Msg "[OK WIDGET] Da mo Icon Noi cho $pName. Keo tha hoac click de copy."
+    Log-Msg "[OK WIDGET] Da mo Icon Noi cho $pName."
 }
 
 # --- SYSTEM TRAY (KHAY TASKBAR CANH DONG HO) ---
@@ -621,24 +748,34 @@ $mItemDr.Add_Click({ Copy-VpnCredentials "openvpn_dr" })
 $trayMenu.Items.Add($mItemDr) | Out-Null
 
 $mItemForti = New-Object System.Windows.Forms.ToolStripMenuItem
-$mItemForti.Text = "3. Copy FortiClient"
+$mItemForti.Text = "3. Copy FortiClient Production"
 $mItemForti.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $mItemForti.Add_Click({ Copy-VpnCredentials "forticlient" })
 $trayMenu.Items.Add($mItemForti) | Out-Null
 
+$mItemOffice = New-Object System.Windows.Forms.ToolStripMenuItem
+$mItemOffice.Text = "4. Ket noi FortiClient Office SSO"
+$mItemOffice.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$mItemOffice.Add_Click({ Connect-FortiOffice })
+$trayMenu.Items.Add($mItemOffice) | Out-Null
+
 $trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
-$mItemWidgetSophos = New-Object System.Windows.Forms.ToolStripMenuItem("Mo Widget Noi - Sophos")
+$mItemWidgetSophos = New-Object System.Windows.Forms.ToolStripMenuItem("Mở Widget Nổi - Sophos")
 $mItemWidgetSophos.Add_Click({ Show-FloatingWidget "sophos" })
 $trayMenu.Items.Add($mItemWidgetSophos) | Out-Null
 
-$mItemWidgetDr = New-Object System.Windows.Forms.ToolStripMenuItem("Mo Widget Noi - OpenVPN DR")
+$mItemWidgetDr = New-Object System.Windows.Forms.ToolStripMenuItem("Mở Widget Nổi - OpenVPN DR")
 $mItemWidgetDr.Add_Click({ Show-FloatingWidget "openvpn_dr" })
 $trayMenu.Items.Add($mItemWidgetDr) | Out-Null
 
+$mItemWidgetOffice = New-Object System.Windows.Forms.ToolStripMenuItem("Mở Widget Nổi - Forti Office SSO")
+$mItemWidgetOffice.Add_Click({ Show-FloatingWidget "forti_office" })
+$trayMenu.Items.Add($mItemWidgetOffice) | Out-Null
+
 $trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
-$mItemShow = New-Object System.Windows.Forms.ToolStripMenuItem("Mo Cua So Chinh")
+$mItemShow = New-Object System.Windows.Forms.ToolStripMenuItem("Mở Cửa Sổ Chính")
 $mItemShow.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $mItemShow.Add_Click({
     $form.Show()
@@ -648,9 +785,16 @@ $mItemShow.Add_Click({
 })
 $trayMenu.Items.Add($mItemShow) | Out-Null
 
-$mItemExit = New-Object System.Windows.Forms.ToolStripMenuItem("Thoat Hoan Toan")
+$mItemConfig = New-Object System.Windows.Forms.ToolStripMenuItem("Cài đặt Tài khoản && Key")
+$mItemConfig.Add_Click({ Show-ConfigDialog })
+$trayMenu.Items.Add($mItemConfig) | Out-Null
+
+$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+$mItemExit = New-Object System.Windows.Forms.ToolStripMenuItem("Thoát Hoàn Toàn")
 $mItemExit.ForeColor = [System.Drawing.Color]::DarkRed
 $mItemExit.Add_Click({
+    Unregister-FortiTunnels
     $trayIcon.Visible = $false
     $trayIcon.Dispose()
     $form.Close()
@@ -671,12 +815,13 @@ $trayIcon.Add_DoubleClick({
 $form.Add_Resize({
     if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
         $form.Hide()
-        $trayIcon.ShowBalloonTip(1500, "VPN Manager", "Ung dung da thu gon xuong Khay Taskbar. Click chuot vao icon ben canh dong ho de copy nhanh Pass+OTP!", [System.Windows.Forms.ToolTipIcon]::Info)
+        $trayIcon.ShowBalloonTip(1500, "VPN Manager", "Ung dung da thu gon xuong Khay Taskbar. Click chuot vao icon ben canh dong ho de thao tac nhanh!", [System.Windows.Forms.ToolTipIcon]::Info)
     }
 })
 
 $form.Add_FormClosing({
     param($s, $e)
+    Unregister-FortiTunnels
     $trayIcon.Visible = $false
     $trayIcon.Dispose()
 })
@@ -686,33 +831,33 @@ $form.Add_FormClosing({
 # ROW 1: Sophos SSL VPN
 $chk1 = New-Object System.Windows.Forms.CheckBox
 $chk1.Text = "1. Sophos SSL VPN"
-$chk1.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$chk1.Location = New-Object System.Drawing.Point(15, 22)
-$chk1.Size = New-Object System.Drawing.Size(195, 26)
+$chk1.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chk1.Location = New-Object System.Drawing.Point(15, 20)
+$chk1.Size = New-Object System.Drawing.Size(195, 24)
 $chk1.Checked = [bool]$cfg.sophos.enabled
 $grpVPN.Controls.Add($chk1)
 
 $lblSt1 = New-Object System.Windows.Forms.Label
-$lblSt1.Text = "[o] Chua ket noi"
+$lblSt1.Text = "[o] Chưa kết nối"
 $lblSt1.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblSt1.ForeColor = [System.Drawing.Color]::Gray
-$lblSt1.Location = New-Object System.Drawing.Point(215, 26)
-$lblSt1.Size = New-Object System.Drawing.Size(185, 20)
+$lblSt1.Location = New-Object System.Drawing.Point(215, 23)
+$lblSt1.Size = New-Object System.Drawing.Size(185, 18)
 $grpVPN.Controls.Add($lblSt1)
 
 $lblOtp1 = New-Object System.Windows.Forms.Label
 $lblOtp1.Text = ""
 $lblOtp1.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblOtp1.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
-$lblOtp1.Location = New-Object System.Drawing.Point(405, 26)
-$lblOtp1.Size = New-Object System.Drawing.Size(120, 20)
+$lblOtp1.Location = New-Object System.Drawing.Point(405, 23)
+$lblOtp1.Size = New-Object System.Drawing.Size(120, 18)
 $grpVPN.Controls.Add($lblOtp1)
 
 $btnCopy1 = New-Object System.Windows.Forms.Button
 $btnCopy1.Text = "Copy Pass+OTP"
-$btnCopy1.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$btnCopy1.Location = New-Object System.Drawing.Point(30, 50)
-$btnCopy1.Size = New-Object System.Drawing.Size(235, 29)
+$btnCopy1.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnCopy1.Location = New-Object System.Drawing.Point(30, 44)
+$btnCopy1.Size = New-Object System.Drawing.Size(235, 26)
 $btnCopy1.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnCopy1.ForeColor = [System.Drawing.Color]::White
 $btnCopy1.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -721,10 +866,10 @@ $btnCopy1.Add_Click({ Copy-VpnCredentials "sophos" $btnCopy1 })
 $grpVPN.Controls.Add($btnCopy1)
 
 $btnFloat1 = New-Object System.Windows.Forms.Button
-$btnFloat1.Text = "Icon Noi"
-$btnFloat1.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$btnFloat1.Location = New-Object System.Drawing.Point(275, 50)
-$btnFloat1.Size = New-Object System.Drawing.Size(235, 29)
+$btnFloat1.Text = "Icon Nổi"
+$btnFloat1.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$btnFloat1.Location = New-Object System.Drawing.Point(275, 44)
+$btnFloat1.Size = New-Object System.Drawing.Size(235, 26)
 $btnFloat1.BackColor = [System.Drawing.Color]::FromArgb(243, 244, 246)
 $btnFloat1.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
 $btnFloat1.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -734,34 +879,34 @@ $grpVPN.Controls.Add($btnFloat1)
 
 # ROW 2: OpenVPN DR Epay
 $chk2 = New-Object System.Windows.Forms.CheckBox
-$chk2.Text = "2. OpenVPN (VPN DR Epay)"
-$chk2.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$chk2.Location = New-Object System.Drawing.Point(15, 88)
-$chk2.Size = New-Object System.Drawing.Size(195, 26)
+$chk2.Text = "2. OpenVPN (VPN DR)"
+$chk2.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chk2.Location = New-Object System.Drawing.Point(15, 76)
+$chk2.Size = New-Object System.Drawing.Size(195, 24)
 $chk2.Checked = [bool]$cfg.openvpn_dr.enabled
 $grpVPN.Controls.Add($chk2)
 
 $lblSt2 = New-Object System.Windows.Forms.Label
-$lblSt2.Text = "[o] Chua ket noi"
+$lblSt2.Text = "[o] Chưa kết nối"
 $lblSt2.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblSt2.ForeColor = [System.Drawing.Color]::Gray
-$lblSt2.Location = New-Object System.Drawing.Point(215, 92)
-$lblSt2.Size = New-Object System.Drawing.Size(185, 20)
+$lblSt2.Location = New-Object System.Drawing.Point(215, 79)
+$lblSt2.Size = New-Object System.Drawing.Size(185, 18)
 $grpVPN.Controls.Add($lblSt2)
 
 $lblOtp2 = New-Object System.Windows.Forms.Label
 $lblOtp2.Text = ""
 $lblOtp2.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblOtp2.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
-$lblOtp2.Location = New-Object System.Drawing.Point(405, 92)
-$lblOtp2.Size = New-Object System.Drawing.Size(120, 20)
+$lblOtp2.Location = New-Object System.Drawing.Point(405, 79)
+$lblOtp2.Size = New-Object System.Drawing.Size(120, 18)
 $grpVPN.Controls.Add($lblOtp2)
 
 $btnCopy2 = New-Object System.Windows.Forms.Button
 $btnCopy2.Text = "Copy Pass+OTP"
-$btnCopy2.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$btnCopy2.Location = New-Object System.Drawing.Point(30, 116)
-$btnCopy2.Size = New-Object System.Drawing.Size(235, 29)
+$btnCopy2.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnCopy2.Location = New-Object System.Drawing.Point(30, 100)
+$btnCopy2.Size = New-Object System.Drawing.Size(235, 26)
 $btnCopy2.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnCopy2.ForeColor = [System.Drawing.Color]::White
 $btnCopy2.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -770,10 +915,10 @@ $btnCopy2.Add_Click({ Copy-VpnCredentials "openvpn_dr" $btnCopy2 })
 $grpVPN.Controls.Add($btnCopy2)
 
 $btnFloat2 = New-Object System.Windows.Forms.Button
-$btnFloat2.Text = "Icon Noi"
-$btnFloat2.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$btnFloat2.Location = New-Object System.Drawing.Point(275, 116)
-$btnFloat2.Size = New-Object System.Drawing.Size(235, 29)
+$btnFloat2.Text = "Icon Nổi"
+$btnFloat2.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$btnFloat2.Location = New-Object System.Drawing.Point(275, 100)
+$btnFloat2.Size = New-Object System.Drawing.Size(235, 26)
 $btnFloat2.BackColor = [System.Drawing.Color]::FromArgb(243, 244, 246)
 $btnFloat2.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
 $btnFloat2.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -781,36 +926,36 @@ $btnFloat2.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnFloat2.Add_Click({ Show-FloatingWidget "openvpn_dr" })
 $grpVPN.Controls.Add($btnFloat2)
 
-# ROW 3: FortiClient
+# ROW 3: FortiClient Production
 $chk3 = New-Object System.Windows.Forms.CheckBox
-$chk3.Text = "3. FortiClient"
-$chk3.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$chk3.Location = New-Object System.Drawing.Point(15, 154)
-$chk3.Size = New-Object System.Drawing.Size(195, 26)
+$chk3.Text = "3. FortiClient (Production)"
+$chk3.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chk3.Location = New-Object System.Drawing.Point(15, 132)
+$chk3.Size = New-Object System.Drawing.Size(195, 24)
 $chk3.Checked = [bool]$cfg.forticlient.enabled
 $grpVPN.Controls.Add($chk3)
 
 $lblSt3 = New-Object System.Windows.Forms.Label
-$lblSt3.Text = "[o] Chua ket noi"
+$lblSt3.Text = "[o] Chưa kết nối"
 $lblSt3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblSt3.ForeColor = [System.Drawing.Color]::Gray
-$lblSt3.Location = New-Object System.Drawing.Point(215, 158)
-$lblSt3.Size = New-Object System.Drawing.Size(185, 20)
+$lblSt3.Location = New-Object System.Drawing.Point(215, 135)
+$lblSt3.Size = New-Object System.Drawing.Size(185, 18)
 $grpVPN.Controls.Add($lblSt3)
 
 $lblOtp3 = New-Object System.Windows.Forms.Label
 $lblOtp3.Text = ""
 $lblOtp3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblOtp3.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
-$lblOtp3.Location = New-Object System.Drawing.Point(405, 158)
-$lblOtp3.Size = New-Object System.Drawing.Size(120, 20)
+$lblOtp3.Location = New-Object System.Drawing.Point(405, 135)
+$lblOtp3.Size = New-Object System.Drawing.Size(120, 18)
 $grpVPN.Controls.Add($lblOtp3)
 
 $btnCopy3 = New-Object System.Windows.Forms.Button
-$btnCopy3.Text = "Copy Mat Khau"
-$btnCopy3.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$btnCopy3.Location = New-Object System.Drawing.Point(30, 182)
-$btnCopy3.Size = New-Object System.Drawing.Size(235, 29)
+$btnCopy3.Text = "Copy Mật Khẩu"
+$btnCopy3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnCopy3.Location = New-Object System.Drawing.Point(30, 156)
+$btnCopy3.Size = New-Object System.Drawing.Size(235, 26)
 $btnCopy3.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnCopy3.ForeColor = [System.Drawing.Color]::White
 $btnCopy3.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -819,10 +964,10 @@ $btnCopy3.Add_Click({ Copy-VpnCredentials "forticlient" $btnCopy3 })
 $grpVPN.Controls.Add($btnCopy3)
 
 $btnFloat3 = New-Object System.Windows.Forms.Button
-$btnFloat3.Text = "Icon Noi"
-$btnFloat3.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$btnFloat3.Location = New-Object System.Drawing.Point(275, 182)
-$btnFloat3.Size = New-Object System.Drawing.Size(235, 29)
+$btnFloat3.Text = "Icon Nổi"
+$btnFloat3.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$btnFloat3.Location = New-Object System.Drawing.Point(275, 156)
+$btnFloat3.Size = New-Object System.Drawing.Size(235, 26)
 $btnFloat3.BackColor = [System.Drawing.Color]::FromArgb(243, 244, 246)
 $btnFloat3.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
 $btnFloat3.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -830,11 +975,74 @@ $btnFloat3.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnFloat3.Add_Click({ Show-FloatingWidget "forticlient" })
 $grpVPN.Controls.Add($btnFloat3)
 
+# ROW 4: FortiClient Office SSO
+$chk4 = New-Object System.Windows.Forms.CheckBox
+$chk4.Text = "4. FortiClient (Office SSO)"
+$chk4.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chk4.Location = New-Object System.Drawing.Point(15, 188)
+$chk4.Size = New-Object System.Drawing.Size(195, 24)
+$chk4.Checked = [bool]$cfg.forti_office.enabled
+$grpVPN.Controls.Add($chk4)
+
+$lblSt4 = New-Object System.Windows.Forms.Label
+$lblSt4.Text = "[o] Chưa kết nối"
+$lblSt4.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblSt4.ForeColor = [System.Drawing.Color]::Gray
+$lblSt4.Location = New-Object System.Drawing.Point(215, 191)
+$lblSt4.Size = New-Object System.Drawing.Size(185, 18)
+$grpVPN.Controls.Add($lblSt4)
+
+$lblOtp4 = New-Object System.Windows.Forms.Label
+$lblOtp4.Text = "SSO Browser"
+$lblOtp4.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Italic)
+$lblOtp4.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$lblOtp4.Location = New-Object System.Drawing.Point(405, 191)
+$lblOtp4.Size = New-Object System.Drawing.Size(120, 18)
+$grpVPN.Controls.Add($lblOtp4)
+
+$btnOpenOffice = New-Object System.Windows.Forms.Button
+$btnOpenOffice.Text = "Mở Forti SSO (Browser)"
+$btnOpenOffice.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnOpenOffice.Location = New-Object System.Drawing.Point(30, 212)
+$btnOpenOffice.Size = New-Object System.Drawing.Size(235, 26)
+$btnOpenOffice.BackColor = [System.Drawing.Color]::FromArgb(14, 116, 144)
+$btnOpenOffice.ForeColor = [System.Drawing.Color]::White
+$btnOpenOffice.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnOpenOffice.Cursor = [System.Windows.Forms.Cursors]::Hand
+$btnOpenOffice.Add_Click({ Connect-FortiOffice })
+$grpVPN.Controls.Add($btnOpenOffice)
+
+$btnRegOffice = New-Object System.Windows.Forms.Button
+$btnRegOffice.Text = "Đồng bộ Forti sang máy này"
+$btnRegOffice.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$btnRegOffice.Location = New-Object System.Drawing.Point(275, 212)
+$btnRegOffice.Size = New-Object System.Drawing.Size(235, 26)
+$btnRegOffice.BackColor = [System.Drawing.Color]::FromArgb(243, 244, 246)
+$btnRegOffice.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
+$btnRegOffice.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnRegOffice.Cursor = [System.Windows.Forms.Cursors]::Hand
+$btnRegOffice.Add_Click({ 
+    $ok = Register-FortiTunnels -verboseLog $true
+    if ($ok) {
+        [System.Windows.Forms.MessageBox]::Show("Đã đồng bộ cấu hình FortiClient Office SSO vào máy tính thành công!`nMở FortiClient để kết nối ngay.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    }
+})
+$grpVPN.Controls.Add($btnRegOffice)
+
+# Ghi chu nhanh huong dan Forti SSO
+$lblHintSSO = New-Object System.Windows.Forms.Label
+$lblHintSSO.Text = "* Lưu ý: FortiClient Office dùng xác thực SSO qua trình duyệt Microsoft (Không dùng User/Pass text)"
+$lblHintSSO.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Italic)
+$lblHintSSO.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$lblHintSSO.Location = New-Object System.Drawing.Point(15, 258)
+$lblHintSSO.Size = New-Object System.Drawing.Size(505, 18)
+$grpVPN.Controls.Add($lblHintSSO)
+
 # Nut bam Ket noi
 $btnConnect = New-Object System.Windows.Forms.Button
-$btnConnect.Text = ">> KET NOI DA CHON"
+$btnConnect.Text = ">> KẾT NỐI ĐÃ CHỌN"
 $btnConnect.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$btnConnect.Location = New-Object System.Drawing.Point(20, 320)
+$btnConnect.Location = New-Object System.Drawing.Point(20, 385)
 $btnConnect.Size = New-Object System.Drawing.Size(260, 38)
 $btnConnect.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnConnect.ForeColor = [System.Drawing.Color]::White
@@ -843,9 +1051,9 @@ $btnConnect.Cursor = [System.Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btnConnect)
 
 $btnAll = New-Object System.Windows.Forms.Button
-$btnAll.Text = "KET NOI TAT CA"
+$btnAll.Text = "KẾT NỐI TẤT CẢ"
 $btnAll.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$btnAll.Location = New-Object System.Drawing.Point(295, 320)
+$btnAll.Location = New-Object System.Drawing.Point(295, 385)
 $btnAll.Size = New-Object System.Drawing.Size(260, 38)
 $btnAll.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
 $btnAll.ForeColor = [System.Drawing.Color]::White
@@ -853,28 +1061,17 @@ $btnAll.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnAll.Cursor = [System.Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btnAll)
 
-# Nut bam Ngat & Cai dat
+# Nut bam Ngat ket noi
 $btnDisconnect = New-Object System.Windows.Forms.Button
-$btnDisconnect.Text = "[X] TAT TOAN BO VPN"
-$btnDisconnect.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$btnDisconnect.Location = New-Object System.Drawing.Point(20, 368)
-$btnDisconnect.Size = New-Object System.Drawing.Size(260, 32)
+$btnDisconnect.Text = "[X] TẮT TOÀN BỘ VPN"
+$btnDisconnect.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$btnDisconnect.Location = New-Object System.Drawing.Point(20, 432)
+$btnDisconnect.Size = New-Object System.Drawing.Size(535, 34)
 $btnDisconnect.BackColor = [System.Drawing.Color]::FromArgb(211, 47, 47)
 $btnDisconnect.ForeColor = [System.Drawing.Color]::White
 $btnDisconnect.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnDisconnect.Cursor = [System.Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btnDisconnect)
-
-$btnConfig = New-Object System.Windows.Forms.Button
-$btnConfig.Text = "Cai dat Tai khoan va Key"
-$btnConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$btnConfig.Location = New-Object System.Drawing.Point(295, 368)
-$btnConfig.Size = New-Object System.Drawing.Size(260, 32)
-$btnConfig.BackColor = [System.Drawing.Color]::FromArgb(230, 235, 245)
-$btnConfig.ForeColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
-$btnConfig.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
-$form.Controls.Add($btnConfig)
 
 # --- TIMER THEO DOI TRANG THAI KET NOI & OTP LIVE ---
 $tickCounter = 0
@@ -898,7 +1095,7 @@ $timer.Add_Tick({
             $mItemSophos.Text = "1. Copy Sophos Pass+OTP (" + $otp1 + ")"
         } else {
             $lblOtp1.Text = ""
-            $mItemSophos.Text = "1. Copy Sophos (Chua co secret)"
+            $mItemSophos.Text = "1. Copy Sophos"
         }
 
         # 2. Cap nhat OTP Live OpenVPN DR
@@ -916,7 +1113,7 @@ $timer.Add_Tick({
             $mItemDr.Text = "2. Copy OpenVPN DR"
         }
 
-        # 3. Cap nhat OTP Live FortiClient neu co secret
+        # 3. Cap nhat OTP Live FortiClient Production neu co secret
         if (-not [string]::IsNullOrWhiteSpace($cfg.forticlient.secret)) {
             $otp3 = Get-TOTP -SecretKey $cfg.forticlient.secret
             $lblOtp3.Text = "OTP: " + $otp3 + " (" + $rem + "s)"
@@ -929,8 +1126,8 @@ $timer.Add_Tick({
             $mItemForti.Text = "3. Copy FortiClient Pass+OTP (" + $otp3 + ")"
         } else {
             $lblOtp3.Text = ""
-            $btnCopy3.Text = "Copy Mat Khau"
-            $mItemForti.Text = "3. Copy Mat Khau FortiClient"
+            $btnCopy3.Text = "Copy Mật Khẩu"
+            $mItemForti.Text = "3. Copy Mật Khẩu FortiClient"
         }
 
         # Cap nhat ToolTip Tray Icon
@@ -941,53 +1138,54 @@ $timer.Add_Tick({
             # 1. Sophos SSL VPN (172.16.x.x)
             $sophosIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^172\.16\." -and $_.AddressState -eq "Preferred" }
             if ($sophosIP) {
-                $lblSt1.Text = "[*] DA KET NOI (" + $sophosIP[0].IPAddress + ")"
+                $lblSt1.Text = "[*] ĐÃ KẾT NỐI (" + $sophosIP[0].IPAddress + ")"
                 $lblSt1.ForeColor = [System.Drawing.Color]::Green
             } else {
-                $lblSt1.Text = "[o] Chua ket noi"
+                $lblSt1.Text = "[o] Chưa kết nối"
                 $lblSt1.ForeColor = [System.Drawing.Color]::Gray
             }
 
             # 2. OpenVPN DR Epay (10.150.x.x)
             $drIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^10\.150\." -and $_.AddressState -eq "Preferred" }
             if ($drIP) {
-                $lblSt2.Text = "[*] DA KET NOI (" + $drIP[0].IPAddress + ")"
+                $lblSt2.Text = "[*] ĐÃ KẾT NỐI (" + $drIP[0].IPAddress + ")"
                 $lblSt2.ForeColor = [System.Drawing.Color]::Green
             } else {
-                $lblSt2.Text = "[o] Chua ket noi"
+                $lblSt2.Text = "[o] Chưa kết nối"
                 $lblSt2.ForeColor = [System.Drawing.Color]::Gray
             }
 
-            # 3. FortiClient
-            $fortiConnected = $false
+            # 3. FortiClient Production (14.238.148.196 / OpenConnect / IP VPN)
             $fortiDisplayIP = ""
-            $ocProc = Get-Process -Name "openconnect", "openfortivpn", "forticlient" -ErrorAction SilentlyContinue
+            $ocProc = Get-Process -Name "openconnect" -ErrorAction SilentlyContinue
             if ($ocProc) {
                 $logPath = Join-Path $baseDir "forti_openconnect.log"
                 if (Test-Path $logPath) {
                     $logText = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
                     if ($logText -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
                         $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
-                        $fortiConnected = $true
-                    }
-                }
-                if (-not $fortiConnected) {
-                    $vpnIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
-                        $_.InterfaceAlias -notmatch "^(Ethernet|Wi-Fi|Loopback|OpenVPN|Bluetooth)" -and $_.AddressState -eq "Preferred" 
-                    } 
-                    if ($vpnIP) {
-                        $fortiDisplayIP = $vpnIP[0].IPAddress
-                        $fortiConnected = $true
                     }
                 }
             }
 
-            if ($fortiConnected -and ![string]::IsNullOrEmpty($fortiDisplayIP)) {
-                $lblSt3.Text = "[*] DA KET NOI (" + $fortiDisplayIP + ")"
+            if (![string]::IsNullOrEmpty($fortiDisplayIP)) {
+                $lblSt3.Text = "[*] ĐÃ KẾT NỐI ($fortiDisplayIP)"
                 $lblSt3.ForeColor = [System.Drawing.Color]::Green
             } else {
-                $lblSt3.Text = "[o] Chua ket noi"
+                $lblSt3.Text = "[o] Chưa kết nối"
                 $lblSt3.ForeColor = [System.Drawing.Color]::Gray
+            }
+
+            # 4. FortiClient Office SSO (Kiem tra card mang Fortinet Virtual Adapter)
+            $officeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
+                (($_.InterfaceAlias -match "Fortinet|Ethernet 2|Ethernet 3" -or ($_.IPAddress -match "^10\." -and $_.IPAddress -notmatch "^10\.150\.")) -and $_.AddressState -eq "Preferred")
+            }
+            if ($officeIP -and $officeIP.Length -gt 0) {
+                $lblSt4.Text = "[*] ĐÃ KẾT NỐI (" + $officeIP[0].IPAddress + ")"
+                $lblSt4.ForeColor = [System.Drawing.Color]::Green
+            } else {
+                $lblSt4.Text = "[o] Chưa kết nối"
+                $lblSt4.ForeColor = [System.Drawing.Color]::Gray
             }
         }
     } catch {}
@@ -1069,10 +1267,10 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
     }
 }
 
-# Helper ket noi FortiClient
+# Helper ket noi FortiClient Production (CLI / OpenConnect)
 function Connect-FortiClient {
     Log-Msg "-------------------------------------------"
-    Log-Msg "Dang ket noi: FortiClient (Tai khoan $($cfg.forticlient.username))..."
+    Log-Msg "Dang ket noi: FortiClient Production (Tai khoan $($cfg.forticlient.username))..."
     $u = $cfg.forticlient.username
     $p = $cfg.forticlient.password
     $sec = $cfg.forticlient.secret
@@ -1122,7 +1320,36 @@ function Connect-FortiClient {
     if (-not $useTask) {
         Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$runBat`"" -WorkingDirectory $toolsDir -WindowStyle Hidden
     }
-    Log-Msg "[OK] Da gui lenh ket noi FortiClient!"
+    Log-Msg "[OK] Da gui lenh ket noi FortiClient Production!"
+}
+
+# Helper ket noi FortiClient Office SSO (SAML Browser Login)
+function Connect-FortiOffice {
+    Log-Msg "-------------------------------------------"
+    Log-Msg "Dang khoi chay: 4. FortiClient Office (SSO SAML qua trinh duyet)..."
+    
+    # 1. Tu dong dong bo cau hinh vao Registry may hien tai
+    Register-FortiTunnels -verboseLog $false | Out-Null
+    Log-Msg "-> Da kiem tra & dong bo tunnel 'Office' vao Registry (Gateway: $($cfg.forti_office.server), SSO: Enabled)."
+
+    # 2. Tim kiem FortiClient.exe tren he thong
+    $fortiExe = $cfg.forti_office.exePath
+    if (-not (Test-Path $fortiExe)) {
+        $fortiExe = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
+    }
+    if (-not (Test-Path $fortiExe)) {
+        $fortiExe = "C:\Program Files (x86)\Fortinet\FortiClient\FortiClient.exe"
+    }
+
+    if (Test-Path $fortiExe) {
+        # Khoi chay giao dien FortiClient de nguoi dung xac thuc SSO 1-Click tren trinh duyet
+        Start-Process -FilePath $fortiExe -ErrorAction SilentlyContinue
+        Log-Msg "[OK] Da mo FortiClient. Hay chon profile 'Office' va bam SAML Login tren trinh duyet!"
+    } else {
+        # Neu may chua cai FortiClient GUI, thong bao va ho tro mo link dang nhap
+        Log-Msg "[!] Luu y: Chua tim thay FortiClient.exe tai duong dan mac dinh."
+        Log-Msg "-> Da luu cau hinh Registry san sang. Hay cai dat FortiClient tren may nay de su dung."
+    }
 }
 
 # Function ngat ket noi toan bo VPN
@@ -1139,23 +1366,37 @@ function Stop-AllVPN {
     Stop-Process -Name "openvpn", "openconnect" -Force -ErrorAction SilentlyContinue
     try { schtasks.exe /end /tn "VPN_Manager_FortiClient" 2>$null | Out-Null } catch {}
 
-    Log-Msg "[OK] Da ngat ket noi VPN thanh cong!"
+    # Xoa bo Registry tunnel FortiClient Office
+    Unregister-FortiTunnels
+
+    Log-Msg "[OK] Da ngat ket noi VPN va don dep Registry thanh cong!"
 }
 
 # Function thuc thi ket noi cac VPN da chon
-function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
+function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3, [bool]$do4) {
+    if (-not ($do1 -or $do2 -or $do3 -or $do4)) {
+        Log-Msg "[-] CHUA CHON VPN: Vui long tich chon it nhat 1 VPN truoc khi bam Ket noi."
+        [System.Windows.Forms.MessageBox]::Show("Vui long tich chon it nhat 1 VPN truoc khi bam '>> KET NOI DA CHON'!", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
     if ($do1) {
         Connect-OpenVpnProfile "1. Sophos SSL VPN" "sophos" $cfg.sophos.dir $cfg.sophos.ovpnFile $cfg.sophos.username $cfg.sophos.password $cfg.sophos.secret
-        if ($do2 -or $do3) { Start-Sleep -Seconds 1 }
+        if ($do2 -or $do3 -or $do4) { Start-Sleep -Seconds 1 }
     }
 
     if ($do2) {
         Connect-OpenVpnProfile "2. OpenVPN (VPN DR Epay)" "epay-dr" $cfg.openvpn_dr.dir $cfg.openvpn_dr.ovpnFile $cfg.openvpn_dr.username $cfg.openvpn_dr.password $cfg.openvpn_dr.secret
-        if ($do3) { Start-Sleep -Seconds 1 }
+        if ($do3 -or $do4) { Start-Sleep -Seconds 1 }
     }
 
     if ($do3) {
         Connect-FortiClient
+        if ($do4) { Start-Sleep -Seconds 1 }
+    }
+
+    if ($do4) {
+        Connect-FortiOffice
     }
 
     Log-Msg "-------------------------------------------"
@@ -1163,20 +1404,21 @@ function Do-Connect([bool]$do1, [bool]$do2, [bool]$do3) {
 }
 
 # --- SU KIEN NUT BAM KET NOI ---
-$btnConnect.Add_Click({ Do-Connect $chk1.Checked $chk2.Checked $chk3.Checked })
+$btnConnect.Add_Click({ Do-Connect $chk1.Checked $chk2.Checked $chk3.Checked $chk4.Checked })
 $btnAll.Add_Click({
     $chk1.Checked = $true
     $chk2.Checked = $true
     $chk3.Checked = $true
-    Do-Connect $true $true $true
+    $chk4.Checked = $true
+    Do-Connect $true $true $true $true
 })
 $btnDisconnect.Add_Click({ Stop-AllVPN })
 
-# Popup Cai dat Tai khoan, Mat khau va Secret Key
-$btnConfig.Add_Click({
+# Popup Cai dat Tai khoan, Mat khau va Secret Key (Mo tu Tray Menu khi can)
+function Show-ConfigDialog {
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = "Cai Dat Tai Khoan & Mat Khau VPN"
-    $dlg.Size = New-Object System.Drawing.Size(530, 650)
+    $dlg.Text = "Cài Đặt Tài Khoản && Mật Khẩu VPN"
+    $dlg.Size = New-Object System.Drawing.Size(530, 720)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false
@@ -1184,62 +1426,79 @@ $btnConfig.Add_Click({
 
     # 1. Sophos SSL VPN
     $grp1 = New-Object System.Windows.Forms.GroupBox
-    $grp1.Text = "  1. Sophos SSL VPN  "; $grp1.Location = "15,10"; $grp1.Size = "480,155"
+    $grp1.Text = "  1. Sophos SSL VPN  "; $grp1.Location = "15,10"; $grp1.Size = "480,145"
     $grp1.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $dlg.Controls.Add($grp1)
 
-    $l1u = New-Object System.Windows.Forms.Label; $l1u.Text = "Tai khoan:"; $l1u.Location = "15,25"; $l1u.Size = "90,20"; $grp1.Controls.Add($l1u)
-    $t1u = New-Object System.Windows.Forms.TextBox; $t1u.Location = "110,23"; $t1u.Size = "350,23"; $t1u.Text = $cfg.sophos.username; $grp1.Controls.Add($t1u)
+    $l1u = New-Object System.Windows.Forms.Label; $l1u.Text = "Tài khoản:"; $l1u.Location = "15,22"; $l1u.Size = "90,20"; $grp1.Controls.Add($l1u)
+    $t1u = New-Object System.Windows.Forms.TextBox; $t1u.Location = "110,20"; $t1u.Size = "350,23"; $t1u.Text = $cfg.sophos.username; $grp1.Controls.Add($t1u)
 
-    $l1p = New-Object System.Windows.Forms.Label; $l1p.Text = "Mat khau:"; $l1p.Location = "15,55"; $l1p.Size = "90,20"; $grp1.Controls.Add($l1p)
-    $t1p = New-Object System.Windows.Forms.TextBox; $t1p.Location = "110,53"; $t1p.Size = "350,23"; $t1p.Text = $cfg.sophos.password; $grp1.Controls.Add($t1p)
+    $l1p = New-Object System.Windows.Forms.Label; $l1p.Text = "Mật khẩu:"; $l1p.Location = "15,50"; $l1p.Size = "90,20"; $grp1.Controls.Add($l1p)
+    $t1p = New-Object System.Windows.Forms.TextBox; $t1p.Location = "110,48"; $t1p.Size = "350,23"; $t1p.Text = $cfg.sophos.password; $grp1.Controls.Add($t1p)
 
-    $l1s = New-Object System.Windows.Forms.Label; $l1s.Text = "Secret Key:"; $l1s.Location = "15,85"; $l1s.Size = "90,20"; $grp1.Controls.Add($l1s)
-    $t1s = New-Object System.Windows.Forms.TextBox; $t1s.Location = "110,83"; $t1s.Size = "350,23"; $t1s.Text = $cfg.sophos.secret; $grp1.Controls.Add($t1s)
+    $l1s = New-Object System.Windows.Forms.Label; $l1s.Text = "Secret Key:"; $l1s.Location = "15,78"; $l1s.Size = "90,20"; $grp1.Controls.Add($l1s)
+    $t1s = New-Object System.Windows.Forms.TextBox; $t1s.Location = "110,76"; $t1s.Size = "350,23"; $t1s.Text = $cfg.sophos.secret; $grp1.Controls.Add($t1s)
 
-    $c1e = New-Object System.Windows.Forms.CheckBox; $c1e.Text = "Mac dinh chon ket noi khi mo ung dung"; $c1e.Location = "110,118"; $c1e.Size = "350,24"
-    $c1e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c1e.Checked = [bool]$cfg.sophos.enabled; $grp1.Controls.Add($c1e)
+    $c1e = New-Object System.Windows.Forms.CheckBox; $c1e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c1e.Location = "110,108"; $c1e.Size = "350,22"
+    $c1e.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular); $c1e.Checked = [bool]$cfg.sophos.enabled; $grp1.Controls.Add($c1e)
 
     # 2. VPN DR Epay
     $grp2 = New-Object System.Windows.Forms.GroupBox
-    $grp2.Text = "  2. OpenVPN (VPN DR Epay)  "; $grp2.Location = "15,175"; $grp2.Size = "480,155"
+    $grp2.Text = "  2. OpenVPN (VPN DR Epay)  "; $grp2.Location = "15,165"; $grp2.Size = "480,145"
     $grp2.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $dlg.Controls.Add($grp2)
 
-    $l2u = New-Object System.Windows.Forms.Label; $l2u.Text = "Tai khoan:"; $l2u.Location = "15,25"; $l2u.Size = "90,20"; $grp2.Controls.Add($l2u)
-    $t2u = New-Object System.Windows.Forms.TextBox; $t2u.Location = "110,23"; $t2u.Size = "350,23"; $t2u.Text = $cfg.openvpn_dr.username; $grp2.Controls.Add($t2u)
+    $l2u = New-Object System.Windows.Forms.Label; $l2u.Text = "Tài khoản:"; $l2u.Location = "15,22"; $l2u.Size = "90,20"; $grp2.Controls.Add($l2u)
+    $t2u = New-Object System.Windows.Forms.TextBox; $t2u.Location = "110,20"; $t2u.Size = "350,23"; $t2u.Text = $cfg.openvpn_dr.username; $grp2.Controls.Add($t2u)
 
-    $l2p = New-Object System.Windows.Forms.Label; $l2p.Text = "Mat khau:"; $l2p.Location = "15,55"; $l2p.Size = "90,20"; $grp2.Controls.Add($l2p)
-    $t2p = New-Object System.Windows.Forms.TextBox; $t2p.Location = "110,53"; $t2p.Size = "350,23"; $t2p.Text = $cfg.openvpn_dr.password; $grp2.Controls.Add($t2p)
+    $l2p = New-Object System.Windows.Forms.Label; $l2p.Text = "Mật khẩu:"; $l2p.Location = "15,50"; $l2p.Size = "90,20"; $grp2.Controls.Add($l2p)
+    $t2p = New-Object System.Windows.Forms.TextBox; $t2p.Location = "110,48"; $t2p.Size = "350,23"; $t2p.Text = $cfg.openvpn_dr.password; $grp2.Controls.Add($t2p)
 
-    $l2s = New-Object System.Windows.Forms.Label; $l2s.Text = "Secret Key:"; $l2s.Location = "15,85"; $l2s.Size = "90,20"; $grp2.Controls.Add($l2s)
-    $t2s = New-Object System.Windows.Forms.TextBox; $t2s.Location = "110,83"; $t2s.Size = "350,23"; $t2s.Text = $cfg.openvpn_dr.secret; $grp2.Controls.Add($t2s)
+    $l2s = New-Object System.Windows.Forms.Label; $l2s.Text = "Secret Key:"; $l2s.Location = "15,78"; $l2s.Size = "90,20"; $grp2.Controls.Add($l2s)
+    $t2s = New-Object System.Windows.Forms.TextBox; $t2s.Location = "110,76"; $t2s.Size = "350,23"; $t2s.Text = $cfg.openvpn_dr.secret; $grp2.Controls.Add($t2s)
 
-    $c2e = New-Object System.Windows.Forms.CheckBox; $c2e.Text = "Mac dinh chon ket noi khi mo ung dung"; $c2e.Location = "110,118"; $c2e.Size = "350,24"
-    $c2e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c2e.Checked = [bool]$cfg.openvpn_dr.enabled; $grp2.Controls.Add($c2e)
+    $c2e = New-Object System.Windows.Forms.CheckBox; $c2e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c2e.Location = "110,108"; $c2e.Size = "350,22"
+    $c2e.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular); $c2e.Checked = [bool]$cfg.openvpn_dr.enabled; $grp2.Controls.Add($c2e)
 
-    # 3. FortiClient
+    # 3. FortiClient Production
     $grp3 = New-Object System.Windows.Forms.GroupBox
-    $grp3.Text = "  3. FortiClient  "; $grp3.Location = "15,340"; $grp3.Size = "480,155"
+    $grp3.Text = "  3. FortiClient (Production)  "; $grp3.Location = "15,320"; $grp3.Size = "480,145"
     $grp3.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $dlg.Controls.Add($grp3)
 
-    $l3u = New-Object System.Windows.Forms.Label; $l3u.Text = "Tai khoan:"; $l3u.Location = "15,25"; $l3u.Size = "90,20"; $grp3.Controls.Add($l3u)
-    $t3u = New-Object System.Windows.Forms.TextBox; $t3u.Location = "110,23"; $t3u.Size = "350,23"; $t3u.Text = $cfg.forticlient.username; $grp3.Controls.Add($t3u)
+    $l3u = New-Object System.Windows.Forms.Label; $l3u.Text = "Tài khoản:"; $l3u.Location = "15,22"; $l3u.Size = "90,20"; $grp3.Controls.Add($l3u)
+    $t3u = New-Object System.Windows.Forms.TextBox; $t3u.Location = "110,20"; $t3u.Size = "350,23"; $t3u.Text = $cfg.forticlient.username; $grp3.Controls.Add($t3u)
 
-    $l3p = New-Object System.Windows.Forms.Label; $l3p.Text = "Mat khau:"; $l3p.Location = "15,55"; $l3p.Size = "90,20"; $grp3.Controls.Add($l3p)
-    $t3p = New-Object System.Windows.Forms.TextBox; $t3p.Location = "110,53"; $t3p.Size = "350,23"; $t3p.Text = $cfg.forticlient.password; $grp3.Controls.Add($t3p)
+    $l3p = New-Object System.Windows.Forms.Label; $l3p.Text = "Mật khẩu:"; $l3p.Location = "15,50"; $l3p.Size = "90,20"; $grp3.Controls.Add($l3p)
+    $t3p = New-Object System.Windows.Forms.TextBox; $t3p.Location = "110,48"; $t3p.Size = "350,23"; $t3p.Text = $cfg.forticlient.password; $grp3.Controls.Add($t3p)
 
-    $l3s = New-Object System.Windows.Forms.Label; $l3s.Text = "Secret Key:"; $l3s.Location = "15,85"; $l3s.Size = "90,20"; $grp3.Controls.Add($l3s)
-    $t3s = New-Object System.Windows.Forms.TextBox; $t3s.Location = "110,83"; $t3s.Size = "350,23"; $t3s.Text = $cfg.forticlient.secret; $grp3.Controls.Add($t3s)
+    $l3s = New-Object System.Windows.Forms.Label; $l3s.Text = "Gateway:"; $l3s.Location = "15,78"; $l3s.Size = "90,20"; $grp3.Controls.Add($l3s)
+    $t3s = New-Object System.Windows.Forms.TextBox; $t3s.Location = "110,76"; $t3s.Size = "350,23"; $t3s.Text = $cfg.forticlient.server; $grp3.Controls.Add($t3s)
 
-    $c3e = New-Object System.Windows.Forms.CheckBox; $c3e.Text = "Mac dinh chon ket noi khi mo ung dung"; $c3e.Location = "110,118"; $c3e.Size = "350,24"
-    $c3e.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular); $c3e.Checked = [bool]$cfg.forticlient.enabled; $grp3.Controls.Add($c3e)
+    $c3e = New-Object System.Windows.Forms.CheckBox; $c3e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c3e.Location = "110,108"; $c3e.Size = "350,22"
+    $c3e.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular); $c3e.Checked = [bool]$cfg.forticlient.enabled; $grp3.Controls.Add($c3e)
+
+    # 4. FortiClient Office SSO
+    $grp4 = New-Object System.Windows.Forms.GroupBox
+    $grp4.Text = "  4. FortiClient (Office SSO SAML)  "; $grp4.Location = "15,475"; $grp4.Size = "480,120"
+    $grp4.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $dlg.Controls.Add($grp4)
+
+    $l4s = New-Object System.Windows.Forms.Label; $l4s.Text = "Gateway SSO:"; $l4s.Location = "15,22"; $l4s.Size = "90,20"; $grp4.Controls.Add($l4s)
+    $t4s = New-Object System.Windows.Forms.TextBox; $t4s.Location = "110,20"; $t4s.Size = "350,23"; $t4s.Text = $cfg.forti_office.server; $grp4.Controls.Add($t4s)
+
+    $l4info = New-Object System.Windows.Forms.Label; $l4info.Text = "Xác thực SSO qua Microsoft Azure AD trên trình duyệt ngoài."
+    $l4info.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Italic)
+    $l4info.ForeColor = [System.Drawing.Color]::FromArgb(70, 80, 95)
+    $l4info.Location = "110,48"; $l4info.Size = "350,18"; $grp4.Controls.Add($l4info)
+
+    $c4e = New-Object System.Windows.Forms.CheckBox; $c4e.Text = "Mặc định chọn kết nối khi mở ứng dụng"; $c4e.Location = "110,72"; $c4e.Size = "350,22"
+    $c4e.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular); $c4e.Checked = [bool]$cfg.forti_office.enabled; $grp4.Controls.Add($c4e)
 
     # Nut Luu Cau Hinh
     $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Text = "LUU CAU HINH"
-    $btnSave.Location = "150,510"; $btnSave.Size = "200,42"
+    $btnSave.Text = "LƯU CẤU HÌNH"
+    $btnSave.Location = "140,610"; $btnSave.Size = "220,40"
     $btnSave.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
     $btnSave.ForeColor = [System.Drawing.Color]::White
     $btnSave.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
@@ -1258,8 +1517,11 @@ $btnConfig.Add_Click({
 
         $cfg.forticlient.username = $t3u.Text.Trim()
         $cfg.forticlient.password = $t3p.Text.Trim()
-        $cfg.forticlient.secret = $t3s.Text.Trim()
+        $cfg.forticlient.server = $t3s.Text.Trim()
         $cfg.forticlient.enabled = $c3e.Checked
+
+        $cfg.forti_office.server = $t4s.Text.Trim()
+        $cfg.forti_office.enabled = $c4e.Checked
 
         Save-Config $cfg
 
@@ -1267,19 +1529,21 @@ $btnConfig.Add_Click({
         $chk1.Checked = $c1e.Checked
         $chk2.Checked = $c2e.Checked
         $chk3.Checked = $c3e.Checked
+        $chk4.Checked = $c4e.Checked
 
-        Log-Msg "[OK] Da luu cau hinh tai khoan & mat khau thanh cong!"
+        Log-Msg "[OK] Đã lưu toàn bộ cấu hình tài khoản && mật khẩu thành công!"
         $dlg.Close()
     })
     $dlg.Controls.Add($btnSave)
     $dlg.ShowDialog()
-})
+}
 
-Log-Msg "He thong san sang."
-Log-Msg "1. Sophos SFOS: Tai khoan $($cfg.sophos.username)"
-Log-Msg "2. VPN DR Epay: Tai khoan $($cfg.openvpn_dr.username)"
-Log-Msg "3. FortiClient: Tai khoan $($cfg.forticlient.username)"
-Log-Msg "-> Ban co the bam 'Copy Pass+OTP' hoac 'Icon Noi' cho tung VPN!"
+Log-Msg "Hệ thống sẵn sàng."
+Log-Msg "1. Sophos SFOS: Tài khoản $($cfg.sophos.username)"
+Log-Msg "2. VPN DR Epay: Tài khoản $($cfg.openvpn_dr.username)"
+Log-Msg "3. FortiClient Production: Tài khoản $($cfg.forticlient.username)"
+Log-Msg "4. FortiClient Office SSO: Gateway $($cfg.forti_office.server) (SAML SSO)"
+Log-Msg "-> Sẵn sàng kết nối VPN (Chỉ lưu Registry khi bấm Login, tự động xóa khi đóng App)."
 
 # Thuc thi GUI
 [System.Windows.Forms.Application]::Run($form)

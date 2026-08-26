@@ -21,9 +21,22 @@
     },
     "forticlient": {
         "enabled": false,
-        "name": "3. FortiClient",
+        "name": "3. FortiClient (Production)",
         "username": "your_username",
         "password": "your_password",
+        "server": "14.238.148.196:4443",
+        "servercert": "pin-sha256:zJcknXTR0B49qZAztOTh7VG2VW80yIwZYdPCWwm2mio=",
+        "exePath": "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"
+    },
+    "forti_office": {
+        "enabled": true,
+        "name": "4. FortiClient (Office SSO)",
+        "tunnelName": "Office",
+        "server": "118.70.184.195:4443",
+        "servercert": "pin-sha256:7/VKi6b/toR0oi4GostxJ6homRPtXwDw44uT/Myh41o=",
+        "sso": true,
+        "useExternalBrowser": true,
         "exePath": "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"
     }
 }
+

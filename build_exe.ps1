@@ -28,13 +28,15 @@ if (-not (Test-Path $cscExe)) {
     exit 1
 }
 
-# Chi nhung cac file trong thu muc config
+# Nhung truc tiep cac file cau hinh vao EXE (Khong can file ben ngoai)
 $targetFiles = @(
+    "vpn_config.json",
     "config\sophos\sophos.ovpn",
-    "config\epay-dr\epay-dr.ovpn"
+    "config\epay-dr\epay-dr.ovpn",
+    "config\forti\FortiClient_Office_SSO.reg"
 )
 
-Write-Host "-> Dang ma hoa va nhung truc tiep cac file .ovpn thu muc config vao EXE..." -ForegroundColor Yellow
+Write-Host "-> Dang ma hoa va nhung truc tiep cac file thu muc config vao EXE..." -ForegroundColor Yellow
 $extractCodeLines = @()
 
 foreach ($relPath in $targetFiles) {
@@ -108,15 +110,23 @@ namespace VPNManagerApp
                 task2.IconResourcePath = currentExe;
 
                 JumpTask task3 = new JumpTask();
-                task3.Title = "3. Copy FortiClient";
+                task3.Title = "3. Copy FortiClient Production";
                 task3.Description = "1-Click Copy Mat khau FortiClient";
                 task3.ApplicationPath = currentExe;
                 task3.Arguments = "-Copy forticlient";
                 task3.IconResourcePath = currentExe;
 
+                JumpTask task4 = new JumpTask();
+                task4.Title = "4. Ket noi FortiClient Office SSO";
+                task4.Description = "1-Click Mo FortiClient Office SSO Browser";
+                task4.ApplicationPath = currentExe;
+                task4.Arguments = "-Copy forti_office";
+                task4.IconResourcePath = currentExe;
+
                 jumpList.JumpItems.Add(task1);
                 jumpList.JumpItems.Add(task2);
                 jumpList.JumpItems.Add(task3);
+                jumpList.JumpItems.Add(task4);
                 jumpList.ShowFrequentCategory = false;
                 jumpList.ShowRecentCategory = false;
                 jumpList.Apply();
@@ -188,7 +198,7 @@ $manifestXml = @"
 Set-Content -Path $manifestFile -Value $manifestXml -Encoding UTF8
 
 Write-Host "-> Dang thuc thi bien dich C# sang VPN_Manager.exe (Chay quyen Standard User - 0 UAC Prompt)..." -ForegroundColor Yellow
-$compileArgs = "/target:winexe /win32manifest:`"$manifestFile`" /out:`"$exeFile`" /r:System.Windows.Forms.dll /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll`" /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll`" `"$csFile`""
+$compileArgs = "/codepage:65001 /utf8output /target:winexe /win32manifest:`"$manifestFile`" /out:`"$exeFile`" /r:System.Windows.Forms.dll /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll`" /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll`" `"$csFile`""
 Start-Process -FilePath $cscExe -ArgumentList $compileArgs -Wait -NoNewWindow
 Remove-Item -Path $manifestFile -Force -ErrorAction SilentlyContinue
 
