@@ -35,6 +35,34 @@ if (-not (Test-Path $userOpenVpnDir)) {
     try { New-Item -ItemType Directory -Path $userOpenVpnDir -Force | Out-Null } catch {}
 }
 
+# Kiem tra quyen Administrator hien tai cua ung dung
+function Test-IsAdmin {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+$script:isAdmin = Test-IsAdmin
+
+function Restart-AsAdmin {
+    $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ($exePath -match "powershell") {
+        $exePath = Join-Path $baseDir "VPN_Manager.exe"
+    }
+    if (Test-Path $exePath) {
+        try {
+            Start-Process -FilePath $exePath -Verb RunAs
+            if ($timer) { $timer.Stop(); $timer.Dispose() }
+            if ($trayIcon) { $trayIcon.Visible = $false; $trayIcon.Dispose() }
+            $form.Close()
+            [System.Windows.Forms.Application]::Exit()
+        } catch {}
+    }
+}
+
 # Doc & Luu cau hinh JSON (Mac dinh de trong, doc truc tiep tu file vpn_config.json)
 function Get-Default-Config {
     return [PSCustomObject]@{
@@ -83,7 +111,8 @@ function Get-Default-Config {
 function Load-Config {
     if (Test-Path $configFile) {
         try {
-            $parsed = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $jsonStr = [System.IO.File]::ReadAllText($configFile, [System.Text.Encoding]::UTF8)
+            $parsed = $jsonStr | ConvertFrom-Json
             if ($parsed) {
                 # Bo sung cac truong mac dinh neu file json cu chua co
                 $def = Get-Default-Config
@@ -99,7 +128,10 @@ function Load-Config {
 }
 
 function Save-Config($cfgData) {
-    $cfgData | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Encoding UTF8
+    try {
+        $json = $cfgData | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($configFile, $json, [System.Text.Encoding]::UTF8)
+    } catch {}
 }
 
 # Ham dang ky / dong bo cau hinh FortiClient Office SSO vao Windows Registry
@@ -137,38 +169,101 @@ function Register-FortiTunnels {
         Set-ItemProperty -Path $hkcuOffice -Name "SavePass" -Value 0 -Type DWord -ErrorAction SilentlyContinue
         Set-ItemProperty -Path $hkcuOffice -Name "DATA3" -Value "" -Type String -ErrorAction SilentlyContinue
 
-        # Import file .reg cua Office neu co trong config\forti
-        $officeReg = Join-Path $baseDir "config\forti\FortiClient_Office_SSO.reg"
-        if (Test-Path $officeReg) {
-            Start-Process -FilePath "reg.exe" -ArgumentList "import `"$officeReg`"" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        # Mac dinh chon Profile Office lam ket noi hien tai trong FortiClient
+        $hkcuFaVpn = "HKCU:\SOFTWARE\Fortinet\FortiClient\FA_VPN"
+        if (-not (Test-Path $hkcuFaVpn)) { New-Item -Path $hkcuFaVpn -Force | Out-Null }
+        Set-ItemProperty -Path $hkcuFaVpn -Name "connection" -Value "Office" -Type String -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $hkcuFaVpn -Name "vpntype" -Value 2 -Type DWord -ErrorAction SilentlyContinue
+
+        # Ghi them vao HKLM neu he thong cho phep
+        $hklmWrote = $false
+        try {
+            $hklmOffice = "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
+            if (-not (Test-Path $hklmOffice)) { New-Item -Path $hklmOffice -Force -ErrorAction Stop | Out-Null }
+            Set-ItemProperty -Path $hklmOffice -Name "Description" -Value "" -Type String -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "Server" -Value $officeServer -Type String -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "ServerSorted" -Value $officeServer -Type String -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "sso_enabled" -Value 1 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "use_external_browser" -Value 1 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "azure_auto_login" -Value 0 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "ServerCert" -Value "1" -Type String -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "promptusername" -Value 0 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "promptcertificate" -Value 0 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -Path $hklmOffice -Name "dual_stack" -Value 0 -Type DWord -ErrorAction Stop
+            $hklmWrote = $true
+        } catch {
+            $hklmWrote = $false
+        }
+
+        # Import file .reg cua Office (chua ca HKCU va HKLM) neu chua ghi duoc vao HKLM
+        if (-not $hklmWrote) {
+            $officeReg = Join-Path $baseDir "config\forti\FortiClient_Office_SSO.reg"
+            if (Test-Path $officeReg) {
+                $p = Start-Process -FilePath "reg.exe" -ArgumentList "import `"$officeReg`"" -WindowStyle Hidden -Wait -PassThru -ErrorAction SilentlyContinue
+                if ($p -and $p.ExitCode -ne 0) {
+                    if ($verboseLog) {
+                        Log-Msg "[i] Yêu cầu quyền Administrator để đồng bộ cấu hình vào hệ thống máy tính..."
+                    }
+                    try {
+                        $pElevated = Start-Process -FilePath "reg.exe" -ArgumentList "import `"$officeReg`"" -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction SilentlyContinue
+                        if ($pElevated -and $pElevated.ExitCode -eq 0) {
+                            $hklmWrote = $true
+                            if ($verboseLog) {
+                                Log-Msg "[OK ADMIN] Đã cấp quyền và đồng bộ vào hệ thống (HKLM) thành công!"
+                            }
+                        }
+                    } catch {
+                        if ($verboseLog) {
+                            Log-Msg "[!] Đã bỏ qua cấp quyền Admin. Cấu hình đã lưu cho tài khoản hiện tại (HKCU)."
+                        }
+                    }
+                }
+            }
         }
 
         $regSuccess = $true
         if ($verboseLog) {
-            Log-Msg "[OK REGISTRY] Da tu dong nap cau hinh FortiClient Office SSO vao may tinh nay!"
+            Log-Msg "[OK REGISTRY] Đã hoàn tất nạp cấu hình FortiClient Office SSO!"
         }
     } catch {
         if ($verboseLog) {
-            Log-Msg "[-] Canh bao Registry: $($_.Exception.Message)"
+            Log-Msg "[-] Cảnh báo Registry: $($_.Exception.Message)"
         }
     }
     return $regSuccess
 }
 
-# Ham xoa bo cau hinh FortiClient Office SSO khoi Windows Registry khi thoat ung dung
+# Ham xoa bo toan bo credential, file auth va cau hinh tam khoi he thong khi ngat / thoat app (Thuc thi tuc thi trong RAM 0ms)
 function Unregister-FortiTunnels {
     try {
+        # 1. Xoa bo Registry tunnel Office trong HKCU truc tiep (0ms)
         $hkcuOffice = "HKCU:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
         if (Test-Path $hkcuOffice) {
             Remove-Item -Path $hkcuOffice -Recurse -Force -ErrorAction SilentlyContinue
         }
+
+        # 2. Xoa bo Registry tunnel Office trong HKLM (0ms neu co quyen)
         $hklmOffice = "HKLM:\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office"
         if (Test-Path $hklmOffice) {
             Remove-Item -Path $hklmOffice -Recurse -Force -ErrorAction SilentlyContinue
         }
-        # Fallback truc tiep bang reg.exe
-        Start-Process -FilePath "reg.exe" -ArgumentList "delete `"HKCU\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office`" /f" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
-        Start-Process -FilePath "reg.exe" -ArgumentList "delete `"HKLM\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office`" /f" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+
+        # 3. Reset profile dang chon ve Production
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Fortinet\FortiClient\FA_VPN" -Name "connection" -Value "Production" -ErrorAction SilentlyContinue
+
+        # 4. Xoa sach toan bo file luu auth mat khau / OTP cua OpenVPN
+        $ovpnConfigDir = Join-Path $env:USERPROFILE "OpenVPN\config"
+        if (Test-Path $ovpnConfigDir) {
+            Remove-Item -Path (Join-Path $ovpnConfigDir "*_auth.txt") -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path (Join-Path $ovpnConfigDir "sophos.ovpn") -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path (Join-Path $ovpnConfigDir "epay-dr.ovpn") -Force -ErrorAction SilentlyContinue
+        }
+
+        # 5. Xoa sach cac file tam chua mat khau cua OpenConnect
+        if ($baseDir) {
+            Remove-Item -Path (Join-Path $baseDir "tools\oc_pass.txt") -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path (Join-Path $baseDir "tools\run_forti.bat") -Force -ErrorAction SilentlyContinue
+        }
     } catch {}
 }
 
@@ -200,13 +295,15 @@ function Get-TOTP {
     $stepBytes = [BitConverter]::GetBytes([long]$step)
     if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($stepBytes) }
     
-    $hmac = New-Object System.Security.Cryptography.HMACSHA1
-    $hmac.Key = $key
-    $hash = $hmac.ComputeHash($stepBytes)
-    
-    $offset = $hash[$hash.Length - 1] -band 0x0F
-    $binary = (($hash[$offset] -band 0x7F) -shl 24) -bor (($hash[$offset + 1] -band 0xFF) -shl 16) -bor (($hash[$offset + 2] -band 0xFF) -shl 8) -bor ($hash[$offset + 3] -band 0xFF)
-    return ($binary % 1000000).ToString("D6")
+    $hmac = New-Object System.Security.Cryptography.HMACSHA1($key)
+    try {
+        $hash = $hmac.ComputeHash($stepBytes)
+        $offset = $hash[$hash.Length - 1] -band 0x0F
+        $binary = (($hash[$offset] -band 0x7F) -shl 24) -bor (($hash[$offset + 1] -band 0xFF) -shl 16) -bor (($hash[$offset + 2] -band 0xFF) -shl 8) -bor ($hash[$offset + 3] -band 0xFF)
+        return ($binary % 1000000).ToString("D6")
+    } finally {
+        $hmac.Dispose()
+    }
 }
 
 # Ham hien thi thong bao OSD Toast tu dong dong sau 1.4 giay
@@ -356,6 +453,13 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
+
+# Bat che do DoubleBuffered chong giat/nhap nhay giao dien
+try {
+    $prop = $form.GetType().GetProperty("DoubleBuffered", [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+    if ($prop) { $prop.SetValue($form, $true, $null) }
+} catch {}
+
 $form.Add_Shown({
     $form.Activate()
     $form.BringToFront()
@@ -373,8 +477,34 @@ $lblTitle.Text = "QUẢN LÝ KẾT NỐI VPN, SSO VÀ OTP"
 $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblTitle.ForeColor = [System.Drawing.Color]::White
 $lblTitle.Location = New-Object System.Drawing.Point(20, 10)
-$lblTitle.Size = New-Object System.Drawing.Size(540, 25)
+$lblTitle.Size = New-Object System.Drawing.Size(430, 25)
 $pnlHeader.Controls.Add($lblTitle)
+
+# Badge quyen Admin / User tren Header
+$lblAdminBadge = New-Object System.Windows.Forms.Label
+if ($script:isAdmin) {
+    $lblAdminBadge.Text = "🛡️ Admin"
+    $lblAdminBadge.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $lblAdminBadge.ForeColor = [System.Drawing.Color]::White
+} else {
+    $lblAdminBadge.Text = "👤 Standard"
+    $lblAdminBadge.BackColor = [System.Drawing.Color]::FromArgb(70, 95, 125)
+    $lblAdminBadge.ForeColor = [System.Drawing.Color]::White
+    $lblAdminBadge.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $ttBadge = New-Object System.Windows.Forms.ToolTip
+    $ttBadge.SetToolTip($lblAdminBadge, "Đang chạy quyền User thường. Click để khởi động lại với quyền Administrator!")
+    $lblAdminBadge.Add_Click({
+        $ans = [System.Windows.Forms.MessageBox]::Show("Bạn có muốn khởi động lại ứng dụng với quyền Administrator (Run as Administrator) không?", "VPN Manager - Admin Elevation", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($ans -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Restart-AsAdmin
+        }
+    })
+}
+$lblAdminBadge.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+$lblAdminBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+$lblAdminBadge.Location = New-Object System.Drawing.Point(460, 12)
+$lblAdminBadge.Size = New-Object System.Drawing.Size(95, 22)
+$pnlHeader.Controls.Add($lblAdminBadge)
 
 $lblSub = New-Object System.Windows.Forms.Label
 $lblSub.Text = "Tự động kết nối OpenVPN, FortiClient SSO Browser và Copy Pass+OTP 1-Click"
@@ -410,13 +540,12 @@ $txtLog.ForeColor = [System.Drawing.Color]::FromArgb(140, 240, 140)
 $txtLog.Font = New-Object System.Drawing.Font("Consolas", 8.5)
 $form.Controls.Add($txtLog)
 
-# Log Message Helper
+# Log Message Helper (Khong dung DoEvents de tranh UI stutter)
 function Log-Msg([string]$msg) {
     $time = (Get-Date).ToString("HH:mm:ss")
     $txtLog.AppendText("[$time] $msg`r`n")
     $txtLog.SelectionStart = $txtLog.Text.Length
     $txtLog.ScrollToCaret()
-    [System.Windows.Forms.Application]::DoEvents()
 }
 
 # Helper Copy Pass + OTP
@@ -790,14 +919,20 @@ $mItemConfig = New-Object System.Windows.Forms.ToolStripMenuItem("Cài đặt T�
 $mItemConfig.Add_Click({ Show-ConfigDialog })
 $trayMenu.Items.Add($mItemConfig) | Out-Null
 
+if (-not $script:isAdmin) {
+    $mItemAdmin = New-Object System.Windows.Forms.ToolStripMenuItem("🛡️ Khởi chạy lại với quyền Admin")
+    $mItemAdmin.Add_Click({ Restart-AsAdmin })
+    $trayMenu.Items.Add($mItemAdmin) | Out-Null
+}
+
 $trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 $mItemExit = New-Object System.Windows.Forms.ToolStripMenuItem("Thoát Hoàn Toàn")
 $mItemExit.ForeColor = [System.Drawing.Color]::DarkRed
 $mItemExit.Add_Click({
+    if ($timer) { $timer.Stop(); $timer.Dispose() }
+    if ($trayIcon) { $trayIcon.Visible = $false; $trayIcon.Dispose() }
     Unregister-FortiTunnels
-    $trayIcon.Visible = $false
-    $trayIcon.Dispose()
     $form.Close()
     [System.Windows.Forms.Application]::Exit()
 })
@@ -822,9 +957,9 @@ $form.Add_Resize({
 
 $form.Add_FormClosing({
     param($s, $e)
+    if ($timer) { $timer.Stop(); $timer.Dispose() }
+    if ($trayIcon) { $trayIcon.Visible = $false; $trayIcon.Dispose() }
     Unregister-FortiTunnels
-    $trayIcon.Visible = $false
-    $trayIcon.Dispose()
 })
 
 # --- THIET KE CAC DONG VPN TRONG GIAO DIEN ---
@@ -1025,7 +1160,18 @@ $btnRegOffice.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnRegOffice.Add_Click({ 
     $ok = Register-FortiTunnels -verboseLog $true
     if ($ok) {
-        [System.Windows.Forms.MessageBox]::Show("Đã đồng bộ cấu hình FortiClient Office SSO vào máy tính thành công!`nMở FortiClient để kết nối ngay.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        # Neu FortiClient dang mo, khoi dong lai de UI load ngay Profile Office
+        $fcProcs = Get-Process -Name "FortiClient" -ErrorAction SilentlyContinue
+        if ($fcProcs) {
+            Stop-Process -Name "FortiClient" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 400
+            $fExe = "C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
+            if (Test-Path $fExe) {
+                $fDir = Split-Path -Path $fExe -Parent
+                Start-Process -FilePath $fExe -WorkingDirectory $fDir -ErrorAction SilentlyContinue
+            }
+        }
+        [System.Windows.Forms.MessageBox]::Show("Đã đồng bộ cấu hình FortiClient Office SSO vào máy tính thành công!`nMở FortiClient và chọn profile 'Office' trong danh sách VPN Name.", "VPN Manager", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     }
 })
 $grpVPN.Controls.Add($btnRegOffice)
@@ -1134,23 +1280,25 @@ $timer.Add_Tick({
         # Cap nhat ToolTip Tray Icon
         $trayIcon.Text = "VPN Manager | Sophos: $otp1 | DR: $otp2"
 
-        # Moi 2 giay kiem tra trang thai IP ket noi VPN thuc te
+        # Moi 2 giay kiem tra trang thai IP ket noi VPN thuc te (Truy van duy nhat 1 lan)
         if ($script:tickCounter % 2 -eq 0) {
+            $allIPs = @(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue)
+
             # 1. Sophos SSL VPN (172.16.x.x)
-            $sophosIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^172\.16\." -and $_.AddressState -eq "Preferred" }
+            $sophosIP = $allIPs | Where-Object { $_.IPAddress -like "172.16.*" }
             if ($sophosIP) {
                 $lblSt1.Text = "[*] ĐÃ KẾT NỐI (" + $sophosIP[0].IPAddress + ")"
-                $lblSt1.ForeColor = [System.Drawing.Color]::Green
+                $lblSt1.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             } else {
                 $lblSt1.Text = "[o] Chưa kết nối"
                 $lblSt1.ForeColor = [System.Drawing.Color]::Gray
             }
 
             # 2. OpenVPN DR Epay (10.150.x.x)
-            $drIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^10\.150\." -and $_.AddressState -eq "Preferred" }
+            $drIP = $allIPs | Where-Object { $_.IPAddress -like "10.150.*" }
             if ($drIP) {
                 $lblSt2.Text = "[*] ĐÃ KẾT NỐI (" + $drIP[0].IPAddress + ")"
-                $lblSt2.ForeColor = [System.Drawing.Color]::Green
+                $lblSt2.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             } else {
                 $lblSt2.Text = "[o] Chưa kết nối"
                 $lblSt2.ForeColor = [System.Drawing.Color]::Gray
@@ -1162,28 +1310,32 @@ $timer.Add_Tick({
             if ($ocProc) {
                 $logPath = Join-Path $baseDir "forti_openconnect.log"
                 if (Test-Path $logPath) {
-                    $logText = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
-                    if ($logText -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
-                        $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
-                    }
+                    try {
+                        $logLines = [System.IO.File]::ReadLines($logPath)
+                        foreach ($line in $logLines) {
+                            if ($line -match "Configured as\s+([0-9\.]+)|Got Legacy IP address\s+([0-9\.]+)") {
+                                $fortiDisplayIP = if ($matches[1]) { $matches[1] } else { $matches[2] }
+                            }
+                        }
+                    } catch {}
                 }
             }
 
             if (![string]::IsNullOrEmpty($fortiDisplayIP)) {
                 $lblSt3.Text = "[*] ĐÃ KẾT NỐI ($fortiDisplayIP)"
-                $lblSt3.ForeColor = [System.Drawing.Color]::Green
+                $lblSt3.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             } else {
                 $lblSt3.Text = "[o] Chưa kết nối"
                 $lblSt3.ForeColor = [System.Drawing.Color]::Gray
             }
 
             # 4. FortiClient Office SSO (Kiem tra card mang Fortinet Virtual Adapter)
-            $officeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
-                (($_.InterfaceAlias -match "Fortinet|Ethernet 2|Ethernet 3" -or ($_.IPAddress -match "^10\." -and $_.IPAddress -notmatch "^10\.150\.")) -and $_.AddressState -eq "Preferred")
+            $officeIP = $allIPs | Where-Object { 
+                (($_.InterfaceAlias -match "Fortinet|Ethernet 2|Ethernet 3" -or ($_.IPAddress -like "10.*" -and $_.IPAddress -notlike "10.150.*")))
             }
             if ($officeIP -and $officeIP.Length -gt 0) {
                 $lblSt4.Text = "[*] ĐÃ KẾT NỐI (" + $officeIP[0].IPAddress + ")"
-                $lblSt4.ForeColor = [System.Drawing.Color]::Green
+                $lblSt4.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             } else {
                 $lblSt4.Text = "[o] Chưa kết nối"
                 $lblSt4.ForeColor = [System.Drawing.Color]::Gray
@@ -1343,6 +1495,10 @@ function Connect-FortiOffice {
     }
 
     if (Test-Path $fortiExe) {
+        # Dong tien trinh cu neu co de FortiClient nap lai toan bo danh sach Profile tu Registry
+        Stop-Process -Name "FortiClient" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+
         # Khoi chay giao dien FortiClient de nguoi dung xac thuc SSO 1-Click tren trinh duyet
         $fortiDir = Split-Path -Path $fortiExe -Parent
         Start-Process -FilePath $fortiExe -WorkingDirectory $fortiDir -ErrorAction SilentlyContinue
@@ -1357,21 +1513,28 @@ function Connect-FortiOffice {
 # Function ngat ket noi toan bo VPN
 function Stop-AllVPN {
     Log-Msg "-------------------------------------------"
-    Log-Msg "Dang ngat ket noi TOAN BO VPN..."
+    Log-Msg "Đang ngắt kết nối TOÀN BỘ VPN..."
 
-    # Gui lenh disconnect toi OpenVPN GUI neu co
+    # 1. Gui lenh disconnect toi OpenVPN GUI neu co
     if (Test-Path $openvpnGuiExe) {
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect_all" -ErrorAction SilentlyContinue
     }
 
-    # Dung cac tien trinh VPN CLI nen
-    Stop-Process -Name "openvpn", "openconnect" -Force -ErrorAction SilentlyContinue
+    # 2. Ngat toan bo cac tien trinh VPN (OpenVPN, OpenConnect, FortiClient GUI va session chay ngam FortiTray)
+    Stop-Process -Name "openvpn", "openconnect", "FortiClient", "FortiTray", "FortiSSLVPNdaemon", "FortiVPN" -Force -ErrorAction SilentlyContinue
     try { schtasks.exe /end /tn "VPN_Manager_FortiClient" 2>$null | Out-Null } catch {}
 
-    # Xoa bo Registry tunnel FortiClient Office
+    # 3. Xoa bo toan bo credential, file auth va Registry tunnel Office
     Unregister-FortiTunnels
 
-    Log-Msg "[OK] Da ngat ket noi VPN va don dep Registry thanh cong!"
+    # 4. Khoi dong lai FortiTray o trang thai ngat sach se
+    $fortiTrayExe = "C:\Program Files\Fortinet\FortiClient\FortiTray.exe"
+    if (Test-Path $fortiTrayExe) {
+        $fortiDir = Split-Path -Path $fortiTrayExe -Parent
+        Start-Process -FilePath $fortiTrayExe -WorkingDirectory $fortiDir -WindowStyle Hidden -ErrorAction SilentlyContinue
+    }
+
+    Log-Msg "[OK] Đã ngắt kết nối TOÀN BỘ VPN và dọn dẹp Registry thành công!"
 }
 
 # Function thuc thi ket noi cac VPN da chon

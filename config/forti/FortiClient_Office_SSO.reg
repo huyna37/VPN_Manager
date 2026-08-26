@@ -10,6 +10,10 @@ Windows Registry Editor Version 5.00
 "logenabled"=dword:00000001
 "loglevel"=dword:00000006
 
+[HKEY_CURRENT_USER\SOFTWARE\Fortinet\FortiClient\FA_VPN]
+"connection"="Office"
+"vpntype"=dword:00000002
+
 [HKEY_CURRENT_USER\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office]
 "Description"=""
 "Server"="118.70.184.195:4443"
@@ -27,4 +31,17 @@ Windows Registry Editor Version 5.00
 "show_remember_password"=dword:00000000
 "show_alwaysup"=dword:00000000
 "show_autoconnect"=dword:00000000
+"DATA3"=""
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Fortinet\FortiClient\Sslvpn\Tunnels\Office]
+"Description"=""
+"Server"="118.70.184.195:4443"
+"ServerSorted"="118.70.184.195:4443"
+"sso_enabled"=dword:00000001
+"use_external_browser"=dword:00000001
+"azure_auto_login"=dword:00000000
+"ServerCert"="1"
+"promptusername"=dword:00000000
+"promptcertificate"=dword:00000000
+"dual_stack"=dword:00000000
 "DATA3"=""
