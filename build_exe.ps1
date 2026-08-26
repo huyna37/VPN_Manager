@@ -61,6 +61,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Text;
+using System.Windows.Shell;
 
 namespace VPNManagerApp
 {
@@ -85,14 +86,57 @@ namespace VPNManagerApp
             catch {}
         }
 
+        private static void RegisterTaskbarJumpList()
+        {
+            try
+            {
+                string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                JumpList jumpList = new JumpList();
+
+                JumpTask task1 = new JumpTask();
+                task1.Title = "1. Copy Sophos (Pass + OTP)";
+                task1.Description = "1-Click Copy Mat khau + OTP cho Sophos";
+                task1.ApplicationPath = currentExe;
+                task1.Arguments = "-Copy sophos";
+                task1.IconResourcePath = currentExe;
+
+                JumpTask task2 = new JumpTask();
+                task2.Title = "2. Copy OpenVPN DR (Pass + OTP)";
+                task2.Description = "1-Click Copy Mat khau + OTP cho OpenVPN DR";
+                task2.ApplicationPath = currentExe;
+                task2.Arguments = "-Copy openvpn_dr";
+                task2.IconResourcePath = currentExe;
+
+                JumpTask task3 = new JumpTask();
+                task3.Title = "3. Copy FortiClient";
+                task3.Description = "1-Click Copy Mat khau FortiClient";
+                task3.ApplicationPath = currentExe;
+                task3.Arguments = "-Copy forticlient";
+                task3.IconResourcePath = currentExe;
+
+                jumpList.JumpItems.Add(task1);
+                jumpList.JumpItems.Add(task2);
+                jumpList.JumpItems.Add(task3);
+                jumpList.ShowFrequentCategory = false;
+                jumpList.ShowRecentCategory = false;
+                jumpList.Apply();
+            }
+            catch {}
+        }
+
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             try
             {
                 string exeDir = AppDomain.CurrentDomain.BaseDirectory;
 
 $extractCodeBlock
+
+                if (args == null || args.Length == 0)
+                {
+                    RegisterTaskbarJumpList();
+                }
 
                 string tempPs1 = Path.Combine(Path.GetTempPath(), "vpn_manager_rt.ps1");
                 
@@ -103,9 +147,10 @@ $csFooter = @"
 ";
                 File.WriteAllText(tempPs1, code, Encoding.UTF8);
 
+                string extraArgs = (args != null && args.Length > 0) ? (" " + string.Join(" ", args)) : "";
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = "powershell.exe";
-                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + tempPs1 + "\"";
+                psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + tempPs1 + "\"" + extraArgs;
                 psi.WorkingDirectory = exeDir;
                 psi.EnvironmentVariables["VPN_MANAGER_APP_DIR"] = exeDir;
                 psi.UseShellExecute = false;
@@ -143,7 +188,7 @@ $manifestXml = @"
 Set-Content -Path $manifestFile -Value $manifestXml -Encoding UTF8
 
 Write-Host "-> Dang thuc thi bien dich C# sang VPN_Manager.exe (Chay quyen Standard User - 0 UAC Prompt)..." -ForegroundColor Yellow
-$compileArgs = "/target:winexe /win32manifest:`"$manifestFile`" /out:`"$exeFile`" /r:System.Windows.Forms.dll `"$csFile`""
+$compileArgs = "/target:winexe /win32manifest:`"$manifestFile`" /out:`"$exeFile`" /r:System.Windows.Forms.dll /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll`" /r:`"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll`" `"$csFile`""
 Start-Process -FilePath $cscExe -ArgumentList $compileArgs -Wait -NoNewWindow
 Remove-Item -Path $manifestFile -Force -ErrorAction SilentlyContinue
 
