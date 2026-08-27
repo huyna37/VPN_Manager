@@ -1,4 +1,4 @@
-# Tham so dong lenh ho tro goi tu phim tat hoac bat widget nhanh
+﻿# Tham so dong lenh ho tro goi tu phim tat hoac bat widget nhanh
 param(
     [string]$Copy = "",
     [string]$CopyProfile = ""
@@ -272,37 +272,61 @@ function Unregister-FortiTunnels {
     Unregister-FortiTunnels
 })
 
+# Ham set Clipboard an toan co retry
+function Set-ClipboardText([string]$text) {
+    if ([string]::IsNullOrEmpty($text)) { return $false }
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($text)
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    return $false
+}
+
 # Ham tinh TOTP 6 so tu Secret Key Base32
 function Get-TOTP {
     param([string]$SecretKey)
     if ([string]::IsNullOrWhiteSpace($SecretKey)) { return "" }
-    $SecretKey = $SecretKey.Trim().ToUpper().Replace(" ", "").Replace("-", "")
-    $base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-    $bits = ""
-    foreach ($c in $SecretKey.ToCharArray()) {
-        $val = $base32Chars.IndexOf($c)
-        if ($val -ge 0) { $bits += [Convert]::ToString($val, 2).PadLeft(5, '0') }
-    }
-    $byteCount = [Math]::Floor($bits.Length / 8)
-    if ($byteCount -le 0) { return "" }
-    $key = New-Object byte[] $byteCount
-    for ($i = 0; $i -lt $byteCount; $i++) {
-        $key[$i] = [Convert]::ToByte($bits.Substring($i * 8, 8), 2)
-    }
-    
-    $unixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $step = [Math]::Floor($unixTime / 30)
-    $stepBytes = [BitConverter]::GetBytes([long]$step)
-    if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($stepBytes) }
-    
-    $hmac = New-Object System.Security.Cryptography.HMACSHA1($key)
     try {
-        $hash = $hmac.ComputeHash($stepBytes)
-        $offset = $hash[$hash.Length - 1] -band 0x0F
-        $binary = (($hash[$offset] -band 0x7F) -shl 24) -bor (($hash[$offset + 1] -band 0xFF) -shl 16) -bor (($hash[$offset + 2] -band 0xFF) -shl 8) -bor ($hash[$offset + 3] -band 0xFF)
-        return ($binary % 1000000).ToString("D6")
-    } finally {
-        $hmac.Dispose()
+        $SecretKey = $SecretKey.Trim().ToUpper().Replace(" ", "").Replace("-", "")
+        $base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        $bits = ""
+        foreach ($c in $SecretKey.ToCharArray()) {
+            $val = $base32Chars.IndexOf($c)
+            if ($val -ge 0) { $bits += [Convert]::ToString($val, 2).PadLeft(5, '0') }
+        }
+        $byteCount = [Math]::Floor($bits.Length / 8)
+        if ($byteCount -le 0) { return "" }
+        $key = New-Object byte[] $byteCount
+        for ($i = 0; $i -lt $byteCount; $i++) {
+            $key[$i] = [Convert]::ToByte($bits.Substring($i * 8, 8), 2)
+        }
+        
+        $unixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $step = [Math]::Floor($unixTime / 30)
+        $stepBytes = [BitConverter]::GetBytes([long]$step)
+        if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($stepBytes) }
+        
+        $hmac = $null
+        try {
+            $hmac = [System.Security.Cryptography.HMACSHA1]::new($key)
+        } catch {
+            $hmac = New-Object System.Security.Cryptography.HMACSHA1 (,$key)
+        }
+
+        try {
+            $hash = $hmac.ComputeHash($stepBytes)
+            $offset = $hash[$hash.Length - 1] -band 0x0F
+            $binary = (($hash[$offset] -band 0x7F) -shl 24) -bor (($hash[$offset + 1] -band 0xFF) -shl 16) -bor (($hash[$offset + 2] -band 0xFF) -shl 8) -bor ($hash[$offset + 3] -band 0xFF)
+            return ($binary % 1000000).ToString("D6")
+        } finally {
+            if ($hmac) { $hmac.Dispose() }
+        }
+    } catch {
+        return ""
     }
 }
 
@@ -310,7 +334,7 @@ function Get-TOTP {
 function Show-Quick-Toast([string]$title, [string]$passOtp, [string]$otp, [int]$rem) {
     try {
         if (-not [string]::IsNullOrEmpty($passOtp)) {
-            [System.Windows.Forms.Clipboard]::SetText($passOtp)
+            Set-ClipboardText $passOtp | Out-Null
         }
 
         $toast = New-Object System.Windows.Forms.Form
@@ -375,7 +399,7 @@ function Show-Quick-Toast([string]$title, [string]$passOtp, [string]$otp, [int]$
         [System.Windows.Forms.Application]::Run($toast)
     } catch {
         if (-not [string]::IsNullOrEmpty($passOtp)) {
-            try { [System.Windows.Forms.Clipboard]::SetText($passOtp) } catch {}
+            try { Set-ClipboardText $passOtp | Out-Null } catch {}
         }
     }
 }
@@ -567,7 +591,7 @@ function Copy-VpnCredentials($key, $btnControl = $null) {
     }
 
     try {
-        [System.Windows.Forms.Clipboard]::SetText($fullPass)
+        Set-ClipboardText $fullPass | Out-Null
         $rem = 30 - ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() % 30)
         if ($otp) {
             Log-Msg "[OK COPY] Da copy [Mat khau + OTP] cua $pName! (OTP: " + $otp + " - Con " + $rem + "s)"
@@ -740,7 +764,7 @@ function Show-FloatingWidget([string]$profKey) {
         }
 
         try {
-            [System.Windows.Forms.Clipboard]::SetText($fullPass)
+            Set-ClipboardText $fullPass | Out-Null
             $wForm.BackColor = [System.Drawing.Color]::FromArgb(22, 101, 52)
             $wLblTitle.Text = "[ĐÃ CHÉP PASS+OTP!]"
             $wLblTitle.ForeColor = [System.Drawing.Color]::White
@@ -1380,7 +1404,7 @@ function Connect-OpenVpnProfile($profileName, $configName, $ovpnSubDir, $ovpnFil
     # Tu dong copy Mat khau + OTP vao Clipboard de tien su dung
     if ($fullPass) {
         try {
-            [System.Windows.Forms.Clipboard]::SetText($fullPass)
+            Set-ClipboardText $fullPass | Out-Null
             Log-Msg "-> Da copy [Mat khau + OTP] vao Clipboard."
         } catch {}
     }
@@ -1455,7 +1479,7 @@ function Connect-FortiClient {
     # Tu dong copy Mat khau vao Clipboard
     if ($fullPass) {
         try {
-            [System.Windows.Forms.Clipboard]::SetText($fullPass)
+            Set-ClipboardText $fullPass | Out-Null
             Log-Msg "-> Da copy [Mat khau FortiClient] vao Clipboard."
         } catch {}
     }
