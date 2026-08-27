@@ -1,6 +1,6 @@
 # ==============================================================================
-# UNG DUNG DANG NHAP SOPHOS SSL VPN
-# Chi chua chuc nang Dang nhap / Ket noi don gian, an hoan toan sao chep mat khau
+# UNG DUNG DANG NHAP SOPHOS SSL VPN (SIMPLE LOGIN)
+# Giao dien Popup Dang nhap truc tiep - An 100% tinh nang sao chep mat khau
 # ==============================================================================
 param(
     [string]$Connect = "",
@@ -39,55 +39,13 @@ if (-not (Test-Path $userOpenVpnDir)) {
     try { New-Item -ItemType Directory -Path $userOpenVpnDir -Force | Out-Null } catch {}
 }
 
-# Dam bao OpenVPN GUI doc dung thu muc user config
+# Dong bo duong dan cau hinh OpenVPN GUI
 try {
     $hkcuGui = "HKCU:\Software\OpenVPN-GUI"
     if (-not (Test-Path $hkcuGui)) { New-Item -Path $hkcuGui -Force | Out-Null }
     Set-ItemProperty -Path $hkcuGui -Name "config_dir" -Value $userOpenVpnDir -Type String -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $hkcuGui -Name "silent_connection" -Value "0" -Type String -Force -ErrorAction SilentlyContinue
 } catch {}
-
-# Ham ghi log he thong / UI
-function Log-Msg([string]$msg) {
-    $time = (Get-Date).ToString("HH:mm:ss")
-    $logLine = "[$time] $msg"
-    try {
-        if ($txtLog -and -not $txtLog.IsDisposed) {
-            $txtLog.AppendText("$logLine`r`n")
-            $txtLog.SelectionStart = $txtLog.Text.Length
-            $txtLog.ScrollToCaret()
-            return
-        }
-    } catch {}
-    Write-Host $logLine
-}
-
-# Kiem tra quyen Admin
-function Test-IsAdmin {
-    try {
-        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    } catch {
-        return $false
-    }
-}
-$script:isAdmin = Test-IsAdmin
-
-function Restart-AsAdmin {
-    $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    if ($exePath -match "powershell") {
-        $exePath = Join-Path $baseDir "VPN_Manager.exe"
-    }
-    if (Test-Path $exePath) {
-        try {
-            Start-Process -FilePath $exePath -Verb RunAs
-            if ($timer) { $timer.Stop(); $timer.Dispose() }
-            if ($trayIcon) { $trayIcon.Visible = $false; $trayIcon.Dispose() }
-            $form.Close()
-            [System.Windows.Forms.Application]::Exit()
-        } catch {}
-    }
-}
 
 # Cau hinh mac dinh
 function Get-Default-Config {
@@ -172,39 +130,62 @@ function Clean-AuthFiles {
     Clean-AuthFiles
 })
 
+# Ham ghi log he thong / UI
+function Log-Status([string]$msg) {
+    $time = (Get-Date).ToString("HH:mm:ss")
+    $logLine = "[$time] $msg"
+    try {
+        if ($lblStatusHint -and -not $lblStatusHint.IsDisposed) {
+            $lblStatusHint.Text = $msg
+        }
+        if ($txtLog -and -not $txtLog.IsDisposed) {
+            $txtLog.AppendText("$logLine`r`n")
+            $txtLog.SelectionStart = $txtLog.Text.Length
+            $txtLog.ScrollToCaret()
+            return
+        }
+    } catch {}
+    Write-Host $logLine
+}
+
 # Ham ket noi Sophos SSL VPN
 function Start-SophosConnect {
+    param(
+        [string]$CustomUser = "",
+        [string]$CustomPass = "",
+        [string]$CustomSecret = ""
+    )
+
     $c = Load-Config
     $prof = $c.sophos
     if (-not $prof) {
-        Log-Msg "[-] LOI: Khong tim thay cau hinh Sophos trong vpn_config.json!"
+        Log-Status "[-] LOI: Khong tim thay cau hinh Sophos trong vpn_config.json!"
         return $false
     }
 
-    $username = $prof.username
-    $password = $prof.password
-    $secret = $prof.secret
+    $username = if ($CustomUser) { $CustomUser } else { $prof.username }
+    $password = if ($CustomPass) { $CustomPass } else { $prof.password }
+    $secret = if ($CustomSecret) { $CustomSecret } else { $prof.secret }
     $dir = $prof.dir
     $ovpnFile = $prof.ovpnFile
     $configName = if ($prof.configName) { $prof.configName } else { "sophos" }
 
     if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) {
-        Log-Msg "[-] CHUA CAI DAT: Vui long nhap Tai khoan va Mat khau trong muc Cai dat!"
-        [System.Windows.Forms.MessageBox]::Show("Chua co thong tin Tai khoan hoac Mat khau!`nVui long bam 'Cai dat' de thiet lap truoc khi ket noi.", "Sophos VPN", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        Log-Status "[-] Vui long nhap day du Tai khoan va Mat khau!"
+        [System.Windows.Forms.MessageBox]::Show("Vui long nhap day du Tai khoan va Mat khau de dang nhap!", "Sophos VPN", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         return $false
     }
 
-    Log-Msg "-------------------------------------------"
-    Log-Msg "Dang khoi tao ket noi Sophos SSL VPN (Tai khoan: $username)..."
+    Log-Status "Dang khoi tao ket noi Sophos SSL VPN..."
 
-    # Ngat tien trinh openvpn cu neu dang ket noi do dang
+    # Ngat tien trinh openvpn cu neu dang chay
     Stop-Process -Name "openvpn" -Force -ErrorAction SilentlyContinue
 
     # Tinh ma OTP tu dong
     $otp = ""
     if (-not [string]::IsNullOrWhiteSpace($secret)) {
         $otp = Get-TOTP -SecretKey $secret
-        Log-Msg "-> Da xac thuc sinh ma 2FA OTP thanh cong."
+        Log-Status "-> Da xac thuc sinh ma 2FA OTP thanh cong."
     }
     $fullPass = if ($otp) { "$password$otp" } else { $password }
 
@@ -215,7 +196,7 @@ function Start-SophosConnect {
     }
 
     if (-not (Test-Path $ovpnSrcFile)) {
-        Log-Msg "[-] LOI: Khong tim thay file cau hinh sophos.ovpn!"
+        Log-Status "[-] LOI: Khong tim thay file cau hinh sophos.ovpn!"
         [System.Windows.Forms.MessageBox]::Show("Khong tim thay file cau hinh sophos.ovpn tai: $ovpnSrcFile", "Loi cau hinh", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return $false
     }
@@ -234,7 +215,7 @@ function Start-SophosConnect {
     }
     Set-Content -Path $targetOvpn -Value $ovpnContent -Encoding UTF8
 
-    # Dong thoi ghi de ca vao thu muc he thong neu co quyen
+    # Dong thoi ghi vao thu muc he thong OpenVPN neu co quyen
     $sysConfigDir = "C:\Program Files\OpenVPN\config"
     if (Test-Path $sysConfigDir) {
         try {
@@ -243,33 +224,33 @@ function Start-SophosConnect {
         } catch {}
     }
 
-    # Khoi chay ket noi OpenVPN
     $started = $false
 
+    # 1. Mo OpenVPN GUI de hien thi bieu tuong khay he thong
     if (Test-Path $openvpnGuiExe) {
         $guiProc = Get-Process -Name "openvpn-gui" -ErrorAction SilentlyContinue
         if (-not $guiProc) {
             Start-Process -FilePath $openvpnGuiExe -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 1000
+            Start-Sleep -Milliseconds 800
         }
         # Gui lenh connect toi OpenVPN GUI
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect ${configName}.ovpn" -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect $configName" -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
-        Log-Msg "[OK] Da gui yeu cau ket noi toi OpenVPN GUI!"
+        Log-Status "[OK] Da gui yeu cau dang nhap toi OpenVPN!"
         $started = $true
     }
 
-    # Neu OpenVPN GUI chua khoi chay tien trinh ket noi sau 1.5s, tu dong chay truc tiep qua OpenVPN CLI
-    Start-Sleep -Milliseconds 1500
+    # 2. Khoi chay OpenVPN CLI ngam de dam bao luon ket noi 100%
+    Start-Sleep -Milliseconds 1200
     $ovpnProc = Get-Process -Name "openvpn" -ErrorAction SilentlyContinue
     if (-not $ovpnProc -and (Test-Path $openvpnExe)) {
         Start-Process -FilePath $openvpnExe -ArgumentList "--config `"$targetOvpn`"" -WorkingDirectory $userOpenVpnDir -WindowStyle Hidden -ErrorAction SilentlyContinue
-        Log-Msg "[OK] Da khoi chay tien trinh OpenVPN ket noi ngam!"
+        Log-Status "[OK] Da khoi chay ket noi OpenVPN thanh cong!"
         $started = $true
     }
 
     if (-not $started) {
-        Log-Msg "[-] LOI: Khong tim thay OpenVPN tren he thong!"
+        Log-Status "[-] LOI: Khong tim thay OpenVPN tren he thong!"
         [System.Windows.Forms.MessageBox]::Show("Khong tim thay OpenVPN tren may tinh!`nVui long cai dat OpenVPN truoc khi ket noi.", "Loi OpenVPN", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return $false
     }
@@ -279,8 +260,7 @@ function Start-SophosConnect {
 
 # Ham ngat ket noi
 function Stop-SophosDisconnect {
-    Log-Msg "-------------------------------------------"
-    Log-Msg "Dang ngat ket noi Sophos SSL VPN..."
+    Log-Status "Dang ngat ket noi Sophos SSL VPN..."
 
     if (Test-Path $openvpnGuiExe) {
         Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command disconnect_all" -ErrorAction SilentlyContinue
@@ -288,7 +268,7 @@ function Stop-SophosDisconnect {
 
     Stop-Process -Name "openvpn" -Force -ErrorAction SilentlyContinue
     Clean-AuthFiles
-    Log-Msg "[OK] Da ngat ket noi va don dep phien lam viec an toan."
+    Log-Status "[OK] Da ngat ket noi va don dep phien lam viec an toan."
 }
 
 # Xu ly tham so dong lenh (CLI)
@@ -313,10 +293,10 @@ try {
 
 $cfg = Load-Config
 
-# --- GIAO DIEN CHINH (MODERN & SIMPLE LOGIN UI) ---
+# --- GIAO DIEN POPUP DANG NHAP SOPHOS VPN (SIMPLE & MODERN LOGIN FORM) ---
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Sophos SSL VPN Client"
-$form.Size = New-Object System.Drawing.Size(460, 580)
+$form.Text = "Dang Nhap Sophos SSL VPN"
+$form.Size = New-Object System.Drawing.Size(430, 520)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -330,122 +310,125 @@ try {
 # Header Panel
 $pnlHeader = New-Object System.Windows.Forms.Panel
 $pnlHeader.Location = New-Object System.Drawing.Point(0, 0)
-$pnlHeader.Size = New-Object System.Drawing.Size(460, 70)
+$pnlHeader.Size = New-Object System.Drawing.Size(430, 65)
 $pnlHeader.BackColor = [System.Drawing.Color]::FromArgb(15, 45, 80)
 $form.Controls.Add($pnlHeader)
 
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Text = "SOPHOS SSL VPN"
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
+$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12.5, [System.Drawing.FontStyle]::Bold)
 $lblTitle.ForeColor = [System.Drawing.Color]::White
-$lblTitle.Location = New-Object System.Drawing.Point(18, 12)
-$lblTitle.Size = New-Object System.Drawing.Size(300, 26)
+$lblTitle.Location = New-Object System.Drawing.Point(18, 10)
+$lblTitle.Size = New-Object System.Drawing.Size(380, 24)
 $pnlHeader.Controls.Add($lblTitle)
 
 $lblSub = New-Object System.Windows.Forms.Label
-$lblSub.Text = "Xac thuc tu dong 2FA OTP & Ket noi an toan"
+$lblSub.Text = "Dang nhap ket noi mang noi bo an toan"
 $lblSub.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
 $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(186, 215, 248)
-$lblSub.Location = New-Object System.Drawing.Point(20, 40)
-$lblSub.Size = New-Object System.Drawing.Size(300, 20)
+$lblSub.Location = New-Object System.Drawing.Point(20, 36)
+$lblSub.Size = New-Object System.Drawing.Size(380, 20)
 $pnlHeader.Controls.Add($lblSub)
 
-# Nut Settings tren Header
-$btnSettingHeader = New-Object System.Windows.Forms.Button
-$btnSettingHeader.Text = "Cai dat"
-$btnSettingHeader.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$btnSettingHeader.Location = New-Object System.Drawing.Point(345, 18)
-$btnSettingHeader.Size = New-Object System.Drawing.Size(85, 32)
-$btnSettingHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 65, 105)
-$btnSettingHeader.ForeColor = [System.Drawing.Color]::White
-$btnSettingHeader.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnSettingHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
-$btnSettingHeader.FlatAppearance.BorderSize = 0
-$btnSettingHeader.Add_Click({ Show-ConfigDialog })
-$pnlHeader.Controls.Add($btnSettingHeader)
-
-# Card Thong tin & Trang thai
+# Card Form Dang Nhap
 $pnlCard = New-Object System.Windows.Forms.Panel
-$pnlCard.Location = New-Object System.Drawing.Point(18, 85)
-$pnlCard.Size = New-Object System.Drawing.Size(408, 150)
+$pnlCard.Location = New-Object System.Drawing.Point(18, 78)
+$pnlCard.Size = New-Object System.Drawing.Size(378, 175)
 $pnlCard.BackColor = [System.Drawing.Color]::White
 $pnlCard.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $form.Controls.Add($pnlCard)
 
-# Dong 1: Tai khoan
-$lblAccTitle = New-Object System.Windows.Forms.Label
-$lblAccTitle.Text = "Tai khoan dang nhap:"
-$lblAccTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-$lblAccTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-$lblAccTitle.Location = New-Object System.Drawing.Point(15, 15)
-$lblAccTitle.Size = New-Object System.Drawing.Size(150, 20)
-$pnlCard.Controls.Add($lblAccTitle)
+# Field 1: Tai khoan
+$lblUser = New-Object System.Windows.Forms.Label
+$lblUser.Text = "Tai khoan:"
+$lblUser.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$lblUser.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+$lblUser.Location = New-Object System.Drawing.Point(15, 16)
+$lblUser.Size = New-Object System.Drawing.Size(95, 20)
+$pnlCard.Controls.Add($lblUser)
 
-$lblAccVal = New-Object System.Windows.Forms.Label
-$lblAccVal.Text = if ($cfg.sophos.username) { $cfg.sophos.username } else { "(Chua cau hinh)" }
-$lblAccVal.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$lblAccVal.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
-$lblAccVal.Location = New-Object System.Drawing.Point(170, 15)
-$lblAccVal.Size = New-Object System.Drawing.Size(220, 20)
-$pnlCard.Controls.Add($lblAccVal)
+$txtUser = New-Object System.Windows.Forms.TextBox
+$txtUser.Location = New-Object System.Drawing.Point(120, 14)
+$txtUser.Size = New-Object System.Drawing.Size(235, 24)
+$txtUser.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+$txtUser.Text = $cfg.sophos.username
+$pnlCard.Controls.Add($txtUser)
 
-# Dong 2: Trang thai 2FA OTP
-$lblOtpTitle = New-Object System.Windows.Forms.Label
-$lblOtpTitle.Text = "Xac thuc 2FA OTP:"
-$lblOtpTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-$lblOtpTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-$lblOtpTitle.Location = New-Object System.Drawing.Point(15, 48)
-$lblOtpTitle.Size = New-Object System.Drawing.Size(150, 20)
-$pnlCard.Controls.Add($lblOtpTitle)
+# Field 2: Mat khau (PasswordChar = '*')
+$lblPass = New-Object System.Windows.Forms.Label
+$lblPass.Text = "Mat khau:"
+$lblPass.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$lblPass.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+$lblPass.Location = New-Object System.Drawing.Point(15, 52)
+$lblPass.Size = New-Object System.Drawing.Size(95, 20)
+$pnlCard.Controls.Add($lblPass)
 
-$lblOtpVal = New-Object System.Windows.Forms.Label
-$lblOtpVal.Text = "[*] Tu dong sinh ma khi dang nhap"
-$lblOtpVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$lblOtpVal.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
-$lblOtpVal.Location = New-Object System.Drawing.Point(170, 48)
-$lblOtpVal.Size = New-Object System.Drawing.Size(220, 20)
-$pnlCard.Controls.Add($lblOtpVal)
+$txtPass = New-Object System.Windows.Forms.TextBox
+$txtPass.Location = New-Object System.Drawing.Point(120, 50)
+$txtPass.Size = New-Object System.Drawing.Size(235, 24)
+$txtPass.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+$txtPass.PasswordChar = '*'
+$txtPass.Text = $cfg.sophos.password
+$pnlCard.Controls.Add($txtPass)
 
-# Dong 3: Trang thai Ket noi
-$lblStatusTitle = New-Object System.Windows.Forms.Label
-$lblStatusTitle.Text = "Trang thai mang:"
-$lblStatusTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-$lblStatusTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-$lblStatusTitle.Location = New-Object System.Drawing.Point(15, 82)
-$lblStatusTitle.Size = New-Object System.Drawing.Size(150, 20)
-$pnlCard.Controls.Add($lblStatusTitle)
+# Field 3: Secret Key 2FA (PasswordChar = '*')
+$lblSecret = New-Object System.Windows.Forms.Label
+$lblSecret.Text = "Secret Key:"
+$lblSecret.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$lblSecret.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+$lblSecret.Location = New-Object System.Drawing.Point(15, 88)
+$lblSecret.Size = New-Object System.Drawing.Size(95, 20)
+$pnlCard.Controls.Add($lblSecret)
+
+$txtSecret = New-Object System.Windows.Forms.TextBox
+$txtSecret.Location = New-Object System.Drawing.Point(120, 86)
+$txtSecret.Size = New-Object System.Drawing.Size(235, 24)
+$txtSecret.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+$txtSecret.PasswordChar = '*'
+$txtSecret.Text = $cfg.sophos.secret
+$pnlCard.Controls.Add($txtSecret)
+
+# Checkbox Ghi nho & Trang thai 2FA
+$chkSave = New-Object System.Windows.Forms.CheckBox
+$chkSave.Text = "Ghi nho mat khau"
+$chkSave.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$chkSave.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+$chkSave.Location = New-Object System.Drawing.Point(120, 120)
+$chkSave.Size = New-Object System.Drawing.Size(130, 22)
+$chkSave.Checked = $true
+$pnlCard.Controls.Add($chkSave)
+
+$lblOtpBadge = New-Object System.Windows.Forms.Label
+$lblOtpBadge.Text = "● 2FA Auto"
+$lblOtpBadge.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+$lblOtpBadge.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
+$lblOtpBadge.Location = New-Object System.Drawing.Point(260, 122)
+$lblOtpBadge.Size = New-Object System.Drawing.Size(95, 20)
+$lblOtpBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$pnlCard.Controls.Add($lblOtpBadge)
+
+# Panel Trang thai ket noi
+$pnlStatus = New-Object System.Windows.Forms.Panel
+$pnlStatus.Location = New-Object System.Drawing.Point(18, 260)
+$pnlStatus.Size = New-Object System.Drawing.Size(378, 38)
+$pnlStatus.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+$pnlStatus.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$form.Controls.Add($pnlStatus)
 
 $lblStatusVal = New-Object System.Windows.Forms.Label
 $lblStatusVal.Text = "[o] Chua ket noi"
 $lblStatusVal.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
-$lblStatusVal.Location = New-Object System.Drawing.Point(170, 82)
-$lblStatusVal.Size = New-Object System.Drawing.Size(220, 20)
-$pnlCard.Controls.Add($lblStatusVal)
+$lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$lblStatusVal.Location = New-Object System.Drawing.Point(10, 8)
+$lblStatusVal.Size = New-Object System.Drawing.Size(355, 20)
+$pnlStatus.Controls.Add($lblStatusVal)
 
-# Dong 4: IP VPN
-$lblIpTitle = New-Object System.Windows.Forms.Label
-$lblIpTitle.Text = "Dia chi IP VPN:"
-$lblIpTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-$lblIpTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-$lblIpTitle.Location = New-Object System.Drawing.Point(15, 114)
-$lblIpTitle.Size = New-Object System.Drawing.Size(150, 20)
-$pnlCard.Controls.Add($lblIpTitle)
-
-$lblIpVal = New-Object System.Windows.Forms.Label
-$lblIpVal.Text = "---.---.---.---"
-$lblIpVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-$lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
-$lblIpVal.Location = New-Object System.Drawing.Point(170, 114)
-$lblIpVal.Size = New-Object System.Drawing.Size(220, 20)
-$pnlCard.Controls.Add($lblIpVal)
-
-# NUT BAM DANG NHAP (CONNECT)
+# NUT BAM DANG NHAP (PRIMARY)
 $btnConnect = New-Object System.Windows.Forms.Button
 $btnConnect.Text = ">> DANG NHAP VPN"
 $btnConnect.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$btnConnect.Location = New-Object System.Drawing.Point(18, 250)
-$btnConnect.Size = New-Object System.Drawing.Size(250, 44)
+$btnConnect.Location = New-Object System.Drawing.Point(18, 308)
+$btnConnect.Size = New-Object System.Drawing.Size(235, 42)
 $btnConnect.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnConnect.ForeColor = [System.Drawing.Color]::White
 $btnConnect.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -453,12 +436,12 @@ $btnConnect.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnConnect.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnConnect)
 
-# NUT BAM NGAT KET NOI (DISCONNECT)
+# NUT BAM NGAT KET NOI
 $btnDisconnect = New-Object System.Windows.Forms.Button
 $btnDisconnect.Text = "[X] NGAT"
-$btnDisconnect.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$btnDisconnect.Location = New-Object System.Drawing.Point(278, 250)
-$btnDisconnect.Size = New-Object System.Drawing.Size(148, 44)
+$btnDisconnect.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$btnDisconnect.Location = New-Object System.Drawing.Point(260, 308)
+$btnDisconnect.Size = New-Object System.Drawing.Size(136, 42)
 $btnDisconnect.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
 $btnDisconnect.ForeColor = [System.Drawing.Color]::White
 $btnDisconnect.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -466,18 +449,10 @@ $btnDisconnect.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnDisconnect.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnDisconnect)
 
-# KHUNG NHAT KY (LOGS)
-$lblLog = New-Object System.Windows.Forms.Label
-$lblLog.Text = "Nhat ky hoat dong:"
-$lblLog.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
-$lblLog.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-$lblLog.Location = New-Object System.Drawing.Point(18, 308)
-$lblLog.Size = New-Object System.Drawing.Size(150, 18)
-$form.Controls.Add($lblLog)
-
+# KHUNG NHAT KY NHO
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(18, 328)
-$txtLog.Size = New-Object System.Drawing.Size(408, 195)
+$txtLog.Location = New-Object System.Drawing.Point(18, 360)
+$txtLog.Size = New-Object System.Drawing.Size(378, 105)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $txtLog.ReadOnly = $true
@@ -497,7 +472,9 @@ $trayMenu.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $mItemLogin = New-Object System.Windows.Forms.ToolStripMenuItem("Dang nhap Sophos VPN")
 $mItemLogin.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$mItemLogin.Add_Click({ Start-SophosConnect })
+$mItemLogin.Add_Click({
+    $btnConnect.PerformClick()
+})
 $trayMenu.Items.Add($mItemLogin) | Out-Null
 
 $mItemDis = New-Object System.Windows.Forms.ToolStripMenuItem("Ngat ket noi")
@@ -514,12 +491,6 @@ $mItemShow.Add_Click({
     $form.BringToFront()
 })
 $trayMenu.Items.Add($mItemShow) | Out-Null
-
-$mItemConfig = New-Object System.Windows.Forms.ToolStripMenuItem("Cai dat tai khoan")
-$mItemConfig.Add_Click({ Show-ConfigDialog })
-$trayMenu.Items.Add($mItemConfig) | Out-Null
-
-$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 $mItemExit = New-Object System.Windows.Forms.ToolStripMenuItem("Thoat")
 $mItemExit.ForeColor = [System.Drawing.Color]::DarkRed
@@ -539,7 +510,6 @@ $trayIcon.Add_DoubleClick({
     $form.Activate()
 })
 
-# Form Closing: thu nho ve Tray
 $form.Add_FormClosing({
     param($sender, $e)
     if ($e.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
@@ -548,9 +518,34 @@ $form.Add_FormClosing({
     }
 })
 
+# Enter key trigger login
+$txtPass.Add_KeyDown({
+    param($s, $e)
+    if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+        $btnConnect.PerformClick()
+    }
+})
+$txtUser.Add_KeyDown({
+    param($s, $e)
+    if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+        $txtPass.Focus()
+    }
+})
+
 # --- SU KIEN NUT BAM ---
 $btnConnect.Add_Click({
-    Start-SophosConnect
+    $u = $txtUser.Text.Trim()
+    $p = $txtPass.Text.Trim()
+    $s = $txtSecret.Text.Trim()
+
+    if ($chkSave.Checked) {
+        $cfg.sophos.username = $u
+        $cfg.sophos.password = $p
+        $cfg.sophos.secret = $s
+        Save-Config $cfg
+    }
+
+    Start-SophosConnect -CustomUser $u -CustomPass $p -CustomSecret $s
 })
 
 $btnDisconnect.Add_Click({
@@ -567,17 +562,18 @@ $timer.Add_Tick({
         $unixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $rem = 30 - ($unixTime % 30)
 
-        # Cap nhat OTP Status
-        if (-not [string]::IsNullOrWhiteSpace($cfg.sophos.secret)) {
-            $lblOtpVal.Text = "[*] Ma 2FA san sang (Doi sau " + $rem + "s)"
+        # Cap nhat badge 2FA
+        $curSec = $txtSecret.Text.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($curSec)) {
+            $lblOtpBadge.Text = "● 2FA (" + $rem + "s)"
             if ($rem -le 5) {
-                $lblOtpVal.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+                $lblOtpBadge.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             } else {
-                $lblOtpVal.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
+                $lblOtpBadge.ForeColor = [System.Drawing.Color]::FromArgb(2, 132, 199)
             }
         } else {
-            $lblOtpVal.Text = "Khong co 2FA"
-            $lblOtpVal.ForeColor = [System.Drawing.Color]::Gray
+            $lblOtpBadge.Text = "Khong co 2FA"
+            $lblOtpBadge.ForeColor = [System.Drawing.Color]::Gray
         }
 
         # Kiem tra tien trinh OpenVPN va IP ket noi
@@ -589,22 +585,16 @@ $timer.Add_Tick({
             }
 
             if ($sophosIP) {
-                $lblStatusVal.Text = "[*] DA KET NOI AN TOAN"
+                $lblStatusVal.Text = "[*] DA KET NOI (" + $sophosIP[0].IPAddress + ")"
                 $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
-                $lblIpVal.Text = $sophosIP[0].IPAddress
-                $lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
                 $trayIcon.Text = "Sophos VPN: Da ket noi (" + $sophosIP[0].IPAddress + ")"
             } elseif ($ovpnProc) {
                 $lblStatusVal.Text = "[~] Dang xac thuc & ket noi..."
                 $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(202, 138, 4)
-                $lblIpVal.Text = "Dang cap IP..."
-                $lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(202, 138, 4)
                 $trayIcon.Text = "Sophos VPN: Dang ket noi..."
             } else {
                 $lblStatusVal.Text = "[o] Chua ket noi"
-                $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
-                $lblIpVal.Text = "---.---.---.---"
-                $lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
+                $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
                 $trayIcon.Text = "Sophos VPN: Chua ket noi"
             }
         }
@@ -612,50 +602,8 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
-# --- DIALOG CAI DAT THONG TIN TAI KHOAN ---
-function Show-ConfigDialog {
-    $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = "Cai Dat Tai Khoan Sophos VPN"
-    $dlg.Size = New-Object System.Drawing.Size(430, 270)
-    $dlg.StartPosition = "CenterParent"
-    $dlg.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-    $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false
-    $dlg.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
-
-    $l1u = New-Object System.Windows.Forms.Label; $l1u.Text = "Ten tai khoan:"; $l1u.Location = "20,25"; $l1u.Size = "110,20"; $l1u.Font = New-Object System.Drawing.Font("Segoe UI", 9); $dlg.Controls.Add($l1u)
-    $t1u = New-Object System.Windows.Forms.TextBox; $t1u.Location = "140,22"; $t1u.Size = "245,23"; $t1u.Text = $cfg.sophos.username; $dlg.Controls.Add($t1u)
-
-    $l1p = New-Object System.Windows.Forms.Label; $l1p.Text = "Mat khau:"; $l1p.Location = "20,65"; $l1p.Size = "110,20"; $l1p.Font = New-Object System.Drawing.Font("Segoe UI", 9); $dlg.Controls.Add($l1p)
-    $t1p = New-Object System.Windows.Forms.TextBox; $t1p.Location = "140,62"; $t1p.Size = "245,23"; $t1p.Text = $cfg.sophos.password; $t1p.PasswordChar = '*'; $dlg.Controls.Add($t1p)
-
-    $l1s = New-Object System.Windows.Forms.Label; $l1s.Text = "Secret Key (OTP):"; $l1s.Location = "20,105"; $l1s.Size = "110,20"; $l1s.Font = New-Object System.Drawing.Font("Segoe UI", 9); $dlg.Controls.Add($l1s)
-    $t1s = New-Object System.Windows.Forms.TextBox; $t1s.Location = "140,102"; $t1s.Size = "245,23"; $t1s.Text = $cfg.sophos.secret; $t1s.PasswordChar = '*'; $dlg.Controls.Add($t1s)
-
-    $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Text = "LUU CAU HINH"
-    $btnSave.Location = "140,155"; $btnSave.Size = "150,36"
-    $btnSave.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
-    $btnSave.ForeColor = [System.Drawing.Color]::White
-    $btnSave.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $btnSave.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnSave.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $btnSave.Add_Click({
-        $cfg.sophos.username = $t1u.Text.Trim()
-        $cfg.sophos.password = $t1p.Text.Trim()
-        $cfg.sophos.secret = $t1s.Text.Trim()
-
-        Save-Config $cfg
-        $lblAccVal.Text = $cfg.sophos.username
-        Log-Msg "[OK] Da luu thong tin tai khoan thanh cong!"
-        $dlg.Close()
-    })
-    $dlg.Controls.Add($btnSave)
-    $dlg.ShowDialog()
-}
-
-Log-Msg "Ung dung Sophos SSL VPN da san sang."
-Log-Msg "Tai khoan hien tai: $($cfg.sophos.username)"
-Log-Msg "Bam '>> DANG NHAP VPN' de ket noi."
+Log-Status "Ung dung Sophos SSL VPN da san sang."
+Log-Status "Bam '>> DANG NHAP VPN' de ket noi."
 
 # Khoi chay GUI
 [System.Windows.Forms.Application]::Run($form)
