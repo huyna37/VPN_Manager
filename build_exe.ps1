@@ -18,6 +18,8 @@ $csFile = Join-Path $baseDir "VPN_Manager.cs"
 $exeFile = Join-Path $baseDir "VPN_Manager.exe"
 $cscExe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
+Stop-Process -Name "VPN_Manager" -Force -ErrorAction SilentlyContinue
+
 if (-not (Test-Path $ps1File)) {
     Write-Host "[-] LOI: Khong tim thay file vpn_manager.ps1" -ForegroundColor Red
     exit 1

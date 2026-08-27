@@ -26,6 +26,9 @@ function Get-Absolute-Path([string]$path) {
 
 $configFile = Join-Path $baseDir "vpn_config.json"
 $openvpnExe = "C:\Program Files\OpenVPN\bin\openvpn.exe"
+if (-not (Test-Path $openvpnExe)) {
+    $openvpnExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn.exe"
+}
 $openvpnGuiExe = "C:\Program Files\OpenVPN\bin\openvpn-gui.exe"
 if (-not (Test-Path $openvpnGuiExe)) {
     $openvpnGuiExe = "C:\Program Files (x86)\OpenVPN\bin\openvpn-gui.exe"
@@ -35,6 +38,13 @@ $userOpenVpnDir = Join-Path $env:USERPROFILE "OpenVPN\config"
 if (-not (Test-Path $userOpenVpnDir)) {
     try { New-Item -ItemType Directory -Path $userOpenVpnDir -Force | Out-Null } catch {}
 }
+
+# Dam bao OpenVPN GUI doc dung thu muc user config
+try {
+    $hkcuGui = "HKCU:\Software\OpenVPN-GUI"
+    if (-not (Test-Path $hkcuGui)) { New-Item -Path $hkcuGui -Force | Out-Null }
+    Set-ItemProperty -Path $hkcuGui -Name "config_dir" -Value $userOpenVpnDir -Type String -Force -ErrorAction SilentlyContinue
+} catch {}
 
 # Ham ghi log he thong / UI
 function Log-Msg([string]$msg) {
@@ -115,7 +125,7 @@ function Save-Config($cfgData) {
     } catch {}
 }
 
-# Tinh TOTP 6 so tu Secret Key Base32
+# Tinh TOTP 6 so tu Secret Key Base32 (Chuan RFC 6238)
 function Get-TOTP {
     param([string]$SecretKey)
     if ([string]::IsNullOrWhiteSpace($SecretKey)) { return "" }
@@ -138,7 +148,7 @@ function Get-TOTP {
     $stepBytes = [BitConverter]::GetBytes([long]$step)
     if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($stepBytes) }
     
-    $hmac = New-Object System.Security.Cryptography.HMACSHA1($key)
+    $hmac = New-Object System.Security.Cryptography.HMACSHA1 -ArgumentList (,$key)
     try {
         $hash = $hmac.ComputeHash($stepBytes)
         $offset = $hash[$hash.Length - 1] -band 0x0F
@@ -187,11 +197,14 @@ function Start-SophosConnect {
     Log-Msg "-------------------------------------------"
     Log-Msg "Dang khoi tao ket noi Sophos SSL VPN (Tai khoan: $username)..."
 
+    # Ngat tien trinh openvpn cu neu dang ket noi do dang
+    Stop-Process -Name "openvpn" -Force -ErrorAction SilentlyContinue
+
     # Tinh ma OTP tu dong
     $otp = ""
     if (-not [string]::IsNullOrWhiteSpace($secret)) {
         $otp = Get-TOTP -SecretKey $secret
-        Log-Msg "-> Da xac thuc 2FA OTP thanh cong."
+        Log-Msg "-> Da xac thuc sinh ma 2FA OTP thanh cong."
     }
     $fullPass = if ($otp) { "$password$otp" } else { $password }
 
@@ -207,49 +220,61 @@ function Start-SophosConnect {
         return $false
     }
 
-    # Ghi file xac thuc tam thoi vao OpenVPN config
+    # Ghi file xac thuc tam thoi vao OpenVPN user config
     $targetAuth = Join-Path $userOpenVpnDir "${configName}_auth.txt"
     $targetOvpn = Join-Path $userOpenVpnDir "${configName}.ovpn"
     Set-Content -Path $targetAuth -Value @($username, $fullPass) -Encoding ASCII
 
-    # Sao chep file .ovpn va tro toi file auth
+    # Sao chep file .ovpn va chen duong dan tuyet doi toi file auth
     $ovpnContent = Get-Content -Path $ovpnSrcFile -Raw
-    $ovpnContent = $ovpnContent -replace "auth-user-pass.*", "auth-user-pass ${configName}_auth.txt"
+    $escapedAuth = ($targetAuth -replace '\\', '/')
+    $ovpnContent = $ovpnContent -replace "(?m)^auth-user-pass.*$", "auth-user-pass `"$escapedAuth`""
+    if ($ovpnContent -notmatch "auth-user-pass") {
+        $ovpnContent += "`r`nauth-user-pass `"$escapedAuth`""
+    }
     Set-Content -Path $targetOvpn -Value $ovpnContent -Encoding UTF8
 
-    $targetConnectName = "${configName}.ovpn"
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) {
-        $sysConfigDir = "C:\Program Files\OpenVPN\config"
-        if (Test-Path $sysConfigDir) {
-            $sysFiles = Get-ChildItem -Path $sysConfigDir -Filter "*.ovpn" -ErrorAction SilentlyContinue
-            foreach ($sf in $sysFiles) {
-                if ($sf.Name -eq "${configName}.ovpn" -or ($sf.Name -match "sophos")) {
-                    $targetConnectName = $sf.Name
-                    break
-                }
-            }
-        }
+    # Dong thoi ghi de ca vao thu muc he thong neu co quyen
+    $sysConfigDir = "C:\Program Files\OpenVPN\config"
+    if (Test-Path $sysConfigDir) {
+        try {
+            Set-Content -Path (Join-Path $sysConfigDir "${configName}_auth.txt") -Value @($username, $fullPass) -Encoding ASCII -ErrorAction SilentlyContinue
+            Set-Content -Path (Join-Path $sysConfigDir "${configName}.ovpn") -Value $ovpnContent -Encoding UTF8 -ErrorAction SilentlyContinue
+        } catch {}
     }
+
+    # Khoi chay ket noi OpenVPN
+    $started = $false
 
     if (Test-Path $openvpnGuiExe) {
         $guiProc = Get-Process -Name "openvpn-gui" -ErrorAction SilentlyContinue
         if (-not $guiProc) {
-            Start-Process -FilePath $openvpnGuiExe
-            Start-Sleep -Milliseconds 800
+            Start-Process -FilePath $openvpnGuiExe -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 1000
         }
-        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect $targetConnectName" -ErrorAction SilentlyContinue
-        Log-Msg "[OK] Da gui lenh dang nhap Sophos toi OpenVPN GUI ($targetConnectName)!"
-        return $true
-    } elseif (Test-Path $openvpnExe) {
-        Start-Process -FilePath $openvpnExe -ArgumentList "--config `"$targetOvpn`"" -WindowStyle Hidden
-        Log-Msg "[OK] Da khoi chay ket noi Sophos qua OpenVPN CLI!"
-        return $true
-    } else {
+        # Gui lenh connect toi OpenVPN GUI
+        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect ${configName}.ovpn" -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
+        Start-Process -FilePath $openvpnGuiExe -ArgumentList "--command connect $configName" -WorkingDirectory $userOpenVpnDir -ErrorAction SilentlyContinue
+        Log-Msg "[OK] Da gui yeu cau ket noi toi OpenVPN GUI!"
+        $started = $true
+    }
+
+    # Neu OpenVPN GUI chua khoi chay tien trinh ket noi sau 1.5s, tu dong chay truc tiep qua OpenVPN CLI
+    Start-Sleep -Milliseconds 1500
+    $ovpnProc = Get-Process -Name "openvpn" -ErrorAction SilentlyContinue
+    if (-not $ovpnProc -and (Test-Path $openvpnExe)) {
+        Start-Process -FilePath $openvpnExe -ArgumentList "--config `"$targetOvpn`"" -WorkingDirectory $userOpenVpnDir -WindowStyle Hidden -ErrorAction SilentlyContinue
+        Log-Msg "[OK] Da khoi chay tien trinh OpenVPN ket noi ngam!"
+        $started = $true
+    }
+
+    if (-not $started) {
         Log-Msg "[-] LOI: Khong tim thay OpenVPN tren he thong!"
         [System.Windows.Forms.MessageBox]::Show("Khong tim thay OpenVPN tren may tinh!`nVui long cai dat OpenVPN truoc khi ket noi.", "Loi OpenVPN", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return $false
     }
+
+    return $true
 }
 
 # Ham ngat ket noi
@@ -555,16 +580,26 @@ $timer.Add_Tick({
             $lblOtpVal.ForeColor = [System.Drawing.Color]::Gray
         }
 
-        # Kiem tra IP Sophos VPN (172.16.x.x)
+        # Kiem tra tien trinh OpenVPN va IP ket noi
         if ($script:tickCount % 2 -eq 0) {
+            $ovpnProc = Get-Process -Name "openvpn" -ErrorAction SilentlyContinue
             $allIPs = @(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue)
-            $sophosIP = $allIPs | Where-Object { $_.IPAddress -like "172.16.*" }
+            $sophosIP = $allIPs | Where-Object { 
+                ($_.IPAddress -like "172.16.*" -or $_.InterfaceAlias -like "*OpenVPN*") -and $_.IPAddress -ne "127.0.0.1"
+            }
+
             if ($sophosIP) {
                 $lblStatusVal.Text = "[*] DA KET NOI AN TOAN"
                 $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
                 $lblIpVal.Text = $sophosIP[0].IPAddress
                 $lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
                 $trayIcon.Text = "Sophos VPN: Da ket noi (" + $sophosIP[0].IPAddress + ")"
+            } elseif ($ovpnProc) {
+                $lblStatusVal.Text = "[~] Dang xac thuc & ket noi..."
+                $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(202, 138, 4)
+                $lblIpVal.Text = "Dang cap IP..."
+                $lblIpVal.ForeColor = [System.Drawing.Color]::FromArgb(202, 138, 4)
+                $trayIcon.Text = "Sophos VPN: Dang ket noi..."
             } else {
                 $lblStatusVal.Text = "[o] Chua ket noi"
                 $lblStatusVal.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
