@@ -1,6 +1,9 @@
 @echo off
 chcp 65001 >nul
-title VPN Multi-Connect Manager
+title Sophos SSL VPN Client
 
-REM Khoi chay VPN Manager ngam/truc tiep (Khong can quyen Admin)
-start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vpn_manager.ps1"
+if exist "%~dp0VPN_Manager.exe" (
+    start "" "%~dp0VPN_Manager.exe"
+) else (
+    start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0vpn_manager.ps1"
+)

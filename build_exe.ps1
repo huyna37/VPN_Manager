@@ -1,8 +1,8 @@
-# Script Dong Goi Tu Dong VPN Manager sang File EXE (Chi nhung thu muc config)
+# Script Dong Goi Tu Dong Sophos VPN sang File EXE (Nhung truc tiep cau hinh)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "  BAT DAU DONG GOI VPN MANAGER SANG FILE EXE   " -ForegroundColor Cyan
+Write-Host "   BAT DAU DONG GOI SOPHOS VPN SANG FILE EXE   " -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 
 $baseDir = $PSScriptRoot
@@ -31,12 +31,10 @@ if (-not (Test-Path $cscExe)) {
 # Nhung truc tiep cac file cau hinh vao EXE (Khong can file ben ngoai)
 $targetFiles = @(
     "vpn_config.json",
-    "config\sophos\sophos.ovpn",
-    "config\epay-dr\epay-dr.ovpn",
-    "config\forti\FortiClient_Office_SSO.reg"
+    "config\sophos\sophos.ovpn"
 )
 
-Write-Host "-> Dang ma hoa va nhung truc tiep cac file thu muc config vao EXE..." -ForegroundColor Yellow
+Write-Host "-> Dang ma hoa va nhung truc tiep cac file cau hinh vao EXE..." -ForegroundColor Yellow
 $extractCodeLines = @()
 
 foreach ($relPath in $targetFiles) {
@@ -65,7 +63,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Windows.Shell;
 
-namespace VPNManagerApp
+namespace SophosVPNApp
 {
     class Program
     {
@@ -96,37 +94,21 @@ namespace VPNManagerApp
                 JumpList jumpList = new JumpList();
 
                 JumpTask task1 = new JumpTask();
-                task1.Title = "1. Copy Sophos (Pass + OTP)";
-                task1.Description = "1-Click Copy Mat khau + OTP cho Sophos";
+                task1.Title = "1. Dang nhap Sophos VPN";
+                task1.Description = "1-Click Ket noi Sophos SSL VPN";
                 task1.ApplicationPath = currentExe;
-                task1.Arguments = "-Copy sophos";
+                task1.Arguments = "-Connect sophos";
                 task1.IconResourcePath = currentExe;
 
                 JumpTask task2 = new JumpTask();
-                task2.Title = "2. Copy OpenVPN DR (Pass + OTP)";
-                task2.Description = "1-Click Copy Mat khau + OTP cho OpenVPN DR";
+                task2.Title = "2. Ngat ket noi VPN";
+                task2.Description = "Ngat toan bo ket noi Sophos VPN";
                 task2.ApplicationPath = currentExe;
-                task2.Arguments = "-Copy openvpn_dr";
+                task2.Arguments = "-Disconnect";
                 task2.IconResourcePath = currentExe;
-
-                JumpTask task3 = new JumpTask();
-                task3.Title = "3. Copy FortiClient Production";
-                task3.Description = "1-Click Copy Mat khau FortiClient";
-                task3.ApplicationPath = currentExe;
-                task3.Arguments = "-Copy forticlient";
-                task3.IconResourcePath = currentExe;
-
-                JumpTask task4 = new JumpTask();
-                task4.Title = "4. Ket noi FortiClient Office SSO";
-                task4.Description = "1-Click Mo FortiClient Office SSO Browser";
-                task4.ApplicationPath = currentExe;
-                task4.Arguments = "-Copy forti_office";
-                task4.IconResourcePath = currentExe;
 
                 jumpList.JumpItems.Add(task1);
                 jumpList.JumpItems.Add(task2);
-                jumpList.JumpItems.Add(task3);
-                jumpList.JumpItems.Add(task4);
                 jumpList.ShowFrequentCategory = false;
                 jumpList.ShowRecentCategory = false;
                 jumpList.Apply();
@@ -148,7 +130,7 @@ $extractCodeBlock
                     RegisterTaskbarJumpList();
                 }
 
-                string tempPs1 = Path.Combine(Path.GetTempPath(), "vpn_manager_rt.ps1");
+                string tempPs1 = Path.Combine(Path.GetTempPath(), "sophos_vpn_rt.ps1");
                 
                 string code = @"
 "@
@@ -172,7 +154,7 @@ $csFooter = @"
             }
             catch (Exception ex)
             {
-                System.Windows.Forms.MessageBox.Show("Loi khoi chay VPN Manager: " + ex.Message, "VPN Manager Error", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
+                System.Windows.Forms.MessageBox.Show("Loi khoi chay Sophos VPN: " + ex.Message, "Sophos VPN Error", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
             }
         }
     }
@@ -206,7 +188,7 @@ if (Test-Path $exeFile) {
     Remove-Item -Path $csFile -Force -ErrorAction SilentlyContinue
     $fileInfo = Get-Item $exeFile
     Write-Host "===============================================" -ForegroundColor Green
-    Write-Host "[OK] THANH CONG: Da nhung thu muc config vao VPN_Manager.exe!" -ForegroundColor Green
+    Write-Host "[OK] THANH CONG: Da nhung cau hinh vao VPN_Manager.exe!" -ForegroundColor Green
     Write-Host "-> Kich thuoc EXE: $([Math]::Round($fileInfo.Length / 1KB, 2)) KB" -ForegroundColor Green
     Write-Host "===============================================" -ForegroundColor Green
 } else {
