@@ -33,7 +33,8 @@ if (-not (Test-Path $cscExe)) {
 # Nhung truc tiep cac file cau hinh vao EXE (Khong can file ben ngoai)
 $targetFiles = @(
     "vpn_config.json",
-    "config\sophos\sophos.ovpn"
+    "config\sophos\sophos.ovpn",
+    "config\forti\FortiClient_Office_SSO.reg"
 )
 
 Write-Host "-> Dang ma hoa va nhung truc tiep cac file cau hinh vao EXE..." -ForegroundColor Yellow
@@ -103,14 +104,30 @@ namespace SophosVPNApp
                 task1.IconResourcePath = currentExe;
 
                 JumpTask task2 = new JumpTask();
-                task2.Title = "2. Ngat ket noi VPN";
-                task2.Description = "Ngat toan bo ket noi Sophos VPN";
+                task2.Title = "2. Nap FortiClient Office SSO";
+                task2.Description = "Nap Registry Profile Office vao may tinh";
                 task2.ApplicationPath = currentExe;
-                task2.Arguments = "-Disconnect";
+                task2.Arguments = "-Action reg_office";
                 task2.IconResourcePath = currentExe;
+
+                JumpTask task3 = new JumpTask();
+                task3.Title = "3. Mo Forti SSO (Browser)";
+                task3.Description = "Mo FortiClient de xac thuc SSO qua trinh duyet";
+                task3.ApplicationPath = currentExe;
+                task3.Arguments = "-Connect office";
+                task3.IconResourcePath = currentExe;
+
+                JumpTask task4 = new JumpTask();
+                task4.Title = "4. Ngat toan bo VPN";
+                task4.Description = "Ngat toan bo ket noi VPN";
+                task4.ApplicationPath = currentExe;
+                task4.Arguments = "-Disconnect";
+                task4.IconResourcePath = currentExe;
 
                 jumpList.JumpItems.Add(task1);
                 jumpList.JumpItems.Add(task2);
+                jumpList.JumpItems.Add(task3);
+                jumpList.JumpItems.Add(task4);
                 jumpList.ShowFrequentCategory = false;
                 jumpList.ShowRecentCategory = false;
                 jumpList.Apply();
